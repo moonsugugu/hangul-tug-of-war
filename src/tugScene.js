@@ -12,6 +12,7 @@ const ASSET_URLS = {
 };
 
 const imageCache = new Map();
+const trimRectCache = new Map();
 const CHARACTER_ROWS = {
   rabbit: 0,
   bear: 0,
@@ -45,6 +46,52 @@ function gridRect(image, columns, rows, column, row, inset = 0) {
     w: Math.round(cellWidth - inset * 2),
     h: Math.round(cellHeight - inset * 2),
   };
+}
+
+function alphaTrimRect(image, rect, padding = 5) {
+  const key = `${image.src}:${rect.x}:${rect.y}:${rect.w}:${rect.h}:${padding}`;
+  const cached = trimRectCache.get(key);
+  if (cached) return cached;
+
+  const canvas = document.createElement('canvas');
+  canvas.width = rect.w;
+  canvas.height = rect.h;
+  const context = canvas.getContext('2d', { willReadFrequently: true });
+  context.drawImage(image, rect.x, rect.y, rect.w, rect.h, 0, 0, rect.w, rect.h);
+  const pixels = context.getImageData(0, 0, rect.w, rect.h).data;
+  let minX = rect.w;
+  let minY = rect.h;
+  let maxX = -1;
+  let maxY = -1;
+
+  for (let y = 0; y < rect.h; y += 1) {
+    for (let x = 0; x < rect.w; x += 1) {
+      if (pixels[(y * rect.w + x) * 4 + 3] > 12) {
+        minX = Math.min(minX, x);
+        minY = Math.min(minY, y);
+        maxX = Math.max(maxX, x);
+        maxY = Math.max(maxY, y);
+      }
+    }
+  }
+
+  if (maxX < 0) {
+    trimRectCache.set(key, rect);
+    return rect;
+  }
+
+  const left = Math.max(0, minX - padding);
+  const top = Math.max(0, minY - padding);
+  const right = Math.min(rect.w - 1, maxX + padding);
+  const bottom = Math.min(rect.h - 1, maxY + padding);
+  const trimmed = {
+    x: rect.x + left,
+    y: rect.y + top,
+    w: right - left + 1,
+    h: bottom - top + 1,
+  };
+  trimRectCache.set(key, trimmed);
+  return trimmed;
 }
 
 function cropTexture(image, rect) {
@@ -84,9 +131,10 @@ function makeSprite(texture, width, height, scale = 1, z = 0) {
   return sprite;
 }
 
-function addCroppedSprite(parent, image, rect, pixelUnit, scale, position, z) {
-  const texture = cropTexture(image, rect);
-  const sprite = makeSprite(texture, rect.w * pixelUnit, rect.h * pixelUnit, scale, z);
+function addCroppedSprite(parent, image, rect, pixelUnit, scale, position, z, padding = 5) {
+  const trimmedRect = alphaTrimRect(image, rect, padding);
+  const texture = cropTexture(image, trimmedRect);
+  const sprite = makeSprite(texture, trimmedRect.w * pixelUnit, trimmedRect.h * pixelUnit, scale, z);
   sprite.position.set(...position);
   parent?.add(sprite);
   return sprite;
@@ -139,6 +187,12 @@ function createCharacters(scene, images, data, pixelUnit) {
       const cheerRect = gridRect(info.image, info.columns, info.rows, info.cheerColumn, row, 3);
       const tug = addCroppedSprite(scene, info.image, tugRect, pixelUnit, 0.86, [baseX, baseY, 1.12], 1.12);
       const cheer = addCroppedSprite(scene, info.image, cheerRect, pixelUnit, 0.86, [baseX, baseY, 1.12], 1.12);
+      if (team === 'white') {
+        // The supplied white-team tug pose pulls toward the right. Mirror it
+        // so the rope points into the center line from the right-hand side.
+        tug.scale.x *= -1;
+        cheer.scale.x *= -1;
+      }
       cheer.visible = false;
       tug.name = `${team}-${player.characterId}-tug`;
       cheer.name = `${team}-${player.characterId}-cheer`;
@@ -149,7 +203,10 @@ function createCharacters(scene, images, data, pixelUnit) {
 }
 
 function createJudge(scene, images, pixelUnit) {
-  const front = addCroppedSprite(scene, images.chibi, gridRect(images.chibi, 5, 5, 0, 0, 3), pixelUnit, 1.02, [0, -0.56, 1.22], 1.22);
+  // The first Sejong pose reaches a little beyond the first nominal cell.
+  // Give it breathing room before alpha trimming so his arms are never sliced.
+  const judgeRect = { x: 48, y: 2, w: 305, h: 220 };
+  const front = addCroppedSprite(scene, images.chibi, judgeRect, pixelUnit, 0.92, [0, 0.18, 1.18], 1.18);
   front.name = 'sejong-judge-sprite';
   return front;
 }
@@ -165,7 +222,7 @@ function createCheerleaders(scene, images, pixelUnit) {
   positions.forEach(([x, y, scale, column], index) => {
     const sprite = addCroppedSprite(scene, images.cheerleaders, gridRect(images.cheerleaders, 6, 3, column, index % 2, 3), pixelUnit, scale, [x, y, 0.25], 0.25);
     sprite.name = `joseon-cheerleader-${index}`;
-    cheerleaders.push({ sprite, phase: index * 0.7 });
+    cheerleaders.push({ sprite, baseY: y, phase: index * 0.7 });
   });
   return cheerleaders;
 }
@@ -269,8 +326,8 @@ export function mountTugScene(container, data) {
         tug.position.y = baseY + bounce;
         cheer.position.y = baseY + bounce;
       });
-      cheerleaders.forEach(({ sprite, phase }) => {
-        sprite.position.y += Math.sin(time * 0.003 + phase) * 0.0009;
+      cheerleaders.forEach(({ sprite, baseY, phase }) => {
+        sprite.position.y = baseY + Math.sin(time * 0.003 + phase) * 0.012;
       });
       if (dust) {
         dust.visible = Math.sin(time * 0.004) > 0.65;
