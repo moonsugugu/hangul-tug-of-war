@@ -12,26 +12,73 @@ const PORT = Number(process.env.PORT || 8787);
 const REFERENCE_CPM = 120;
 const RELAY_LIMIT_MS = 12_000;
 const ROUND_MULTIPLIERS = [1, 1.1, 1.3, 1.5];
+const CHARACTER_IDS = ['rabbit', 'bear', 'cat', 'chick', 'panda', 'sheep', 'fox', 'penguin'];
 
 const WORD_PROMPTS = [
-  { word: '윤슬', meaning: '햇빛이나 달빛이 물결에 비쳐 반짝이는 모습', example: '강물 위로 윤슬이 반짝였습니다.' },
-  { word: '여우비', meaning: '햇빛이 있는 날 잠깐 내리는 비', example: '맑은 하늘에서 여우비가 내렸습니다.' },
-  { word: '너울', meaning: '큰 물결', example: '바다에 너울이 일었습니다.' },
-  { word: '모꼬지', meaning: '여러 사람이 모이는 일', example: '친구들과 즐거운 모꼬지를 열었습니다.' },
-  { word: '미리내', meaning: '은하수', example: '밤하늘에 미리내가 흐릅니다.' },
-  { word: '도란도란', meaning: '여럿이 정답게 이야기하는 모양', example: '아이들이 도란도란 이야기를 나눕니다.' },
-  { word: '바람꽃', meaning: '바람에 흔들리는 꽃처럼 피어난 작은 꽃', example: '들판에 바람꽃이 피었습니다.' },
-  { word: '한가람', meaning: '큰 강을 뜻하는 우리말', example: '한가람처럼 넓은 마음을 가져요.' },
+  { word: '윤슬', meaning: '햇빛이나 달빛이 물결에 비쳐 반짝이는 모습', example: '강물 위로 윤슬이 반짝였습니다.', category: '자연' },
+  { word: '여우비', meaning: '햇빛이 있는 날 잠깐 내리는 비', example: '맑은 하늘에서 여우비가 내렸습니다.', category: '자연' },
+  { word: '너울', meaning: '큰 물결', example: '바다에 너울이 일었습니다.', category: '자연' },
+  { word: '모꼬지', meaning: '여러 사람이 모이는 일', example: '친구들과 즐거운 모꼬지를 열었습니다.', category: '모임' },
+  { word: '미리내', meaning: '은하수', example: '밤하늘에 미리내가 흐릅니다.', category: '자연' },
+  { word: '도란도란', meaning: '여럿이 정답게 이야기하는 모양', example: '아이들이 도란도란 이야기를 나눕니다.', category: '말맛' },
+  { word: '가람', meaning: '강', example: '가람을 따라 마을이 이어졌습니다.', category: '자연' },
+  { word: '아람', meaning: '잘 익은 열매가 알맞게 벌어진 모양', example: '가을 나무에 아람이 가득 열렸습니다.', category: '자연' },
+  { word: '마루', meaning: '산이나 지붕의 가장 높은 곳', example: '산마루에 아침 해가 떠올랐습니다.', category: '자연' },
+  { word: '나래', meaning: '날개', example: '새가 나래를 활짝 펼쳤습니다.', category: '자연' },
+  { word: '누리', meaning: '세상', example: '누리 곳곳에 한글의 아름다움을 알려요.', category: '마음' },
+  { word: '겨레', meaning: '같은 핏줄이나 문화를 가진 사람들', example: '우리 겨레는 오랜 시간 우리말을 지켜 왔습니다.', category: '마음' },
+  { word: '샛별', meaning: '새벽 무렵 동쪽 하늘에 보이는 밝은 별', example: '샛별이 떠오르는 이른 아침입니다.', category: '자연' },
+  { word: '한가위', meaning: '추석을 이르는 우리말', example: '한가위 보름달처럼 풍성한 하루를 보내요.', category: '문화' },
+  { word: '여울', meaning: '강이나 바다의 얕고 빠르게 흐르는 곳', example: '아이들이 여울물에 발을 담갔습니다.', category: '자연' },
+  { word: '꽃보라', meaning: '흩날리는 꽃잎을 눈보라에 빗대어 이르는 말', example: '벚꽃 꽃보라가 길 위에 내려앉았습니다.', category: '자연' },
+  { word: '시나브로', meaning: '모르는 사이에 조금씩', example: '시나브로 봄이 우리 곁에 왔습니다.', category: '움직임' },
+  { word: '오롯이', meaning: '모자람 없이 온전하게', example: '오늘은 책 읽기에 마음을 오롯이 써 보아요.', category: '마음' },
+  { word: '바투', meaning: '두 대상 사이가 썩 가깝게', example: '친구와 바투 앉아 이야기를 들었습니다.', category: '모양' },
+  { word: '해거름', meaning: '해가 서쪽으로 넘어갈 무렵', example: '해거름에 운동장에 긴 그림자가 생겼습니다.', category: '자연' },
+  { word: '어스름', meaning: '조금 어둑한 빛이나 그때의 시간', example: '어스름이 내리자 등불을 밝혔습니다.', category: '자연' },
+  { word: '곰살궂다', meaning: '성질이 부드럽고 다정하다', example: '곰살궂은 말 한마디가 친구를 웃게 했습니다.', category: '마음' },
+  { word: '살뜰하다', meaning: '정성스럽고 알뜰하다', example: '서로를 살뜰하게 돌보는 교실입니다.', category: '마음' },
+  { word: '소담하다', meaning: '모양이 탐스럽고 보기 좋다', example: '소담한 글씨로 한글날 카드를 꾸몄습니다.', category: '모양' },
+  { word: '고즈넉하다', meaning: '고요하고 아늑하다', example: '고즈넉한 한옥 마을을 걸었습니다.', category: '모양' },
+  { word: '아늑하다', meaning: '포근하고 편안한 느낌이 있다', example: '우리말 책이 있는 교실은 아늑합니다.', category: '마음' },
+  { word: '해사하다', meaning: '얼굴이 맑고 밝다', example: '아이들의 해사한 웃음이 운동장을 채웠습니다.', category: '모양' },
+  { word: '알음알음', meaning: '서로 아는 관계를 통하여', example: '알음알음 모인 친구들이 한글 퀴즈를 풀었습니다.', category: '모임' },
+  { word: '살랑살랑', meaning: '바람이 가볍게 부는 모양', example: '깃발이 살랑살랑 흔들렸습니다.', category: '움직임' },
+  { word: '포슬포슬', meaning: '눈이나 가루가 부드럽게 쌓인 모양', example: '포슬포슬 내린 눈 위에 발자국이 남았습니다.', category: '모양' },
+  { word: '몽글몽글', meaning: '작은 덩이가 여럿 모여 부드러운 모양', example: '구름이 몽글몽글 피어올랐습니다.', category: '모양' },
+  { word: '가만가만', meaning: '움직임이나 말소리가 조용한 모양', example: '가만가만 문장을 읽어 보았습니다.', category: '움직임' },
+  { word: '두루두루', meaning: '빠짐없이 골고루', example: '우리말의 아름다움을 두루두루 알아보아요.', category: '마음' },
+  { word: '달보드레', meaning: '달콤하고 부드러운 느낌', example: '달보드레한 가을밤의 공기를 느꼈습니다.', category: '느낌' },
+  { word: '아지랑이', meaning: '봄날 햇볕에 아른거리는 공기', example: '들판 위로 아지랑이가 피어올랐습니다.', category: '자연' },
+  { word: '바람꽃', meaning: '바람에 흔들리며 피어 있는 작은 꽃', example: '들판에 바람꽃이 피었습니다.', category: '자연' },
+  { word: '다솜', meaning: '사랑', example: '다솜을 담아 친구에게 따뜻한 말을 건넸습니다.', category: '마음' },
+  { word: '온새미로', meaning: '가르거나 쪼개지 않고 생긴 그대로', example: '자연을 온새미로 바라보며 글을 썼습니다.', category: '마음' },
+  { word: '보듬다', meaning: '두 팔로 감싸 품다', example: '서로의 실수를 보듬는 마음이 필요합니다.', category: '마음' },
+  { word: '새벽녘', meaning: '새벽 무렵', example: '새벽녘 하늘에 샛별이 빛났습니다.', category: '자연' },
 ];
 
-const QUIZ_PROMPTS = [
-  { meaning: '햇빛이 있는 날 잠깐 내리는 비', choices: ['너울', '여우비', '미리내'], answer: '여우비' },
-  { meaning: '햇빛이나 달빛이 물결에 비쳐 반짝이는 모습', choices: ['윤슬', '모꼬지', '바람꽃'], answer: '윤슬' },
-  { meaning: '큰 물결', choices: ['도란도란', '한가람', '너울'], answer: '너울' },
-  { meaning: '여러 사람이 모이는 일', choices: ['모꼬지', '여우비', '윤슬'], answer: '모꼬지' },
-  { meaning: '은하수', choices: ['미리내', '바람꽃', '너울'], answer: '미리내' },
-  { meaning: '여럿이 정답게 이야기하는 모양', choices: ['한가람', '도란도란', '여우비'], answer: '도란도란' },
+const WORD_QUIZ_PROMPTS = WORD_PROMPTS.slice(0, 24).map((prompt, index) => ({
+  category: '순우리말',
+  meaning: prompt.meaning,
+  choices: [prompt.word, WORD_PROMPTS[(index + 7) % WORD_PROMPTS.length].word, WORD_PROMPTS[(index + 15) % WORD_PROMPTS.length].word],
+  answer: prompt.word,
+  explanation: `${prompt.word}은(는) ‘${prompt.meaning}’이라는 뜻이에요.`,
+}));
+
+const HANGUL_CREATION_QUIZ_PROMPTS = [
+  { category: '한글 창제', meaning: '훈민정음이 세상에 반포된 해는 언제일까요?', choices: ['1443년', '1446년', '1592년'], answer: '1446년', explanation: '훈민정음은 1443년에 완성되고 1446년에 반포되었습니다.' },
+  { category: '한글 창제', meaning: '세종대왕이 훈민정음을 만든 가장 큰 뜻은 무엇일까요?', choices: ['백성이 쉽게 읽고 쓰도록 돕기 위해', '궁궐 장식을 만들기 위해', '외국어를 없애기 위해'], answer: '백성이 쉽게 읽고 쓰도록 돕기 위해', explanation: '세종대왕은 백성이 자신의 생각을 쉽게 표현할 수 있기를 바랐습니다.' },
+  { category: '한글 창제', meaning: '훈민정음은 한글의 처음 이름입니다. 맞는 설명은 무엇일까요?', choices: ['백성을 가르치는 바른 소리', '나라를 지키는 큰 노래', '세상을 밝히는 별빛'], answer: '백성을 가르치는 바른 소리', explanation: '훈민정음은 ‘백성을 가르치는 바른 소리’라는 뜻입니다.' },
+  { category: '한글 창제', meaning: '한글날은 언제일까요?', choices: ['3월 1일', '10월 9일', '12월 25일'], answer: '10월 9일', explanation: '10월 9일은 한글날로, 훈민정음 반포를 기념합니다.' },
+  { category: '한글 창제', meaning: '훈민정음 해례본이 알려 주는 내용은 무엇일까요?', choices: ['창제 원리와 사용 방법', '조선의 음식 조리법', '궁궐의 건축 설계도'], answer: '창제 원리와 사용 방법', explanation: '해례본에는 훈민정음의 원리와 글자를 쓰는 방법이 설명되어 있습니다.' },
+  { category: '한글 창제', meaning: '훈민정음의 자음은 무엇을 본떠 만들었을까요?', choices: ['발음할 때의 입과 목 등의 모양', '밤하늘의 별자리', '궁궐의 문양'], answer: '발음할 때의 입과 목 등의 모양', explanation: '기본 자음은 소리를 낼 때의 발음 기관 모양을 본떠 만들었습니다.' },
+  { category: '한글 창제', meaning: '훈민정음의 기본 모음이 바탕으로 삼은 것은 무엇일까요?', choices: ['천·지·인', '봄·여름·가을', '산·강·바다'], answer: '천·지·인', explanation: '기본 모음은 하늘, 땅, 사람을 뜻하는 천·지·인을 바탕으로 만들었습니다.' },
+  { category: '한글 창제', meaning: '한글의 가장 큰 장점으로 알맞은 것은 무엇일까요?', choices: ['소리와 글자의 관계를 이해하기 쉽다', '오직 왕만 쓸 수 있다', '배우는 데 아주 오랜 시간이 걸린다'], answer: '소리와 글자의 관계를 이해하기 쉽다', explanation: '한글은 소리를 내는 원리와 글자 모양의 관계가 잘 드러납니다.' },
+  { category: '한글 창제', meaning: '세종대왕이 훈민정음을 만든 마음과 가장 가까운 것은 무엇일까요?', choices: ['백성을 사랑하는 마음', '경쟁에서 이기려는 마음', '비밀을 숨기려는 마음'], answer: '백성을 사랑하는 마음', explanation: '훈민정음에는 백성을 생각한 세종대왕의 애민 정신이 담겨 있습니다.' },
+  { category: '한글 창제', meaning: '오늘 우리가 한글을 지키는 방법으로 알맞은 것은 무엇일까요?', choices: ['우리말을 아끼고 바르게 쓰기', '어려운 말만 골라 쓰기', '다른 사람의 말을 놀리기'], answer: '우리말을 아끼고 바르게 쓰기', explanation: '우리말을 존중하고 정확하게 쓰는 것이 한글 사랑의 시작입니다.' },
 ];
+
+const QUIZ_PROMPTS = [...WORD_QUIZ_PROMPTS, ...HANGUL_CREATION_QUIZ_PROMPTS];
 
 const REPAIR_PROMPTS = [
   {
@@ -46,13 +93,58 @@ const REPAIR_PROMPTS = [
   },
   {
     question: '세종대왕님고맙습니다',
-    answer: '세종대왕님, 고맙습니다',
-    explanation: '부르는 말 뒤에는 쉼표를 넣어 문장을 또렷하게 만들 수 있습니다.',
+    answer: '세종대왕님 고맙습니다',
+    explanation: '부르는 말과 이어지는 말을 알맞게 띄어 씁니다.',
   },
   {
     question: '한글은누구나쉽게배울수있는문자입니다.',
     answer: '한글은 누구나 쉽게 배울 수 있는 문자입니다.',
     explanation: '문장 속 낱말을 알맞게 띄어 씁니다.',
+  },
+  {
+    question: '훈민정음은백성을위해만들었습니다.',
+    answer: '훈민정음은 백성을 위해 만들었습니다.',
+    explanation: '조사와 낱말을 구분해 띄어 써야 합니다.',
+  },
+  {
+    question: '10월9일은한글날입니다.',
+    answer: '10월 9일은 한글날입니다.',
+    explanation: '날짜와 낱말 사이를 정확히 띄어 씁니다.',
+  },
+  {
+    question: '우리함께바른말을써요.',
+    answer: '우리 함께 바른말을 써요.',
+    explanation: '‘우리 함께’와 ‘바른말을 써요’를 알맞게 띄어 씁니다.',
+  },
+  {
+    question: '세종대왕은백성들이쉽게읽고쓰기를바랐습니다.',
+    answer: '세종대왕은 백성들이 쉽게 읽고 쓰기를 바랐습니다.',
+    explanation: '문장 속 낱말을 의미 단위에 맞게 띄어 씁니다.',
+  },
+  {
+    question: '한글은소중한우리문화유산입니다.',
+    answer: '한글은 소중한 우리 문화유산입니다.',
+    explanation: '‘우리 문화유산’처럼 낱말 사이를 띄어 씁니다.',
+  },
+  {
+    question: '뜻을알고쓰면우리말이더재미있어요.',
+    answer: '뜻을 알고 쓰면 우리말이 더 재미있어요.',
+    explanation: '말의 뜻을 생각하며 낱말 사이를 정확히 띄어 씁니다.',
+  },
+  {
+    question: '모두가읽고쓸수있는글자를만들었습니다.',
+    answer: '모두가 읽고 쓸 수 있는 글자를 만들었습니다.',
+    explanation: '‘쓸 수 있는’은 낱말 단위로 띄어 씁니다.',
+  },
+  {
+    question: '한글날에우리말도감을만들어보아요.',
+    answer: '한글날에 우리말 도감을 만들어 보아요.',
+    explanation: '‘만들어 보아요’처럼 보조 용언 앞을 띄어 씁니다.',
+  },
+  {
+    question: '우리말의아름다움을함께느껴요.',
+    answer: '우리말의 아름다움을 함께 느껴요.',
+    explanation: '조사와 낱말을 구분해 띄어 씁니다.',
   },
 ];
 
@@ -61,12 +153,16 @@ const RELAY_PROMPTS = [
   '한글날에는 우리말의 아름다움을 함께 느껴요.',
   '세종대왕님, 누구나 읽고 쓰는 세상을 열어 주셔서 고맙습니다.',
   '정확한 말과 따뜻한 마음으로 서로를 존중해요.',
+  '세종대왕은 백성이 쉽게 읽고 쓰도록 훈민정음을 만들었습니다.',
+  '훈민정음은 1446년에 세상에 반포되었습니다.',
+  '한글의 자음과 모음에는 소리를 생각한 원리가 담겨 있습니다.',
+  '오늘도 바른 우리말로 서로의 마음을 따뜻하게 전해요.',
 ];
 
 const MODES = [
-  { id: 'word', name: '말모이 기본전', description: '순우리말을 빠르고 정확하게 입력해요.', duration: 45_000 },
-  { id: 'quiz', name: '뜻풀이 객관식 역전전', description: '뜻을 읽고 알맞은 순우리말을 골라요.', duration: 60_000 },
-  { id: 'repair', name: '바른말 수리공', description: '띄어쓰기와 문장을 바르게 고쳐요.', duration: 60_000 },
+  { id: 'word', name: '말모이 기본전', description: '더 다양해진 순우리말을 빠르고 정확하게 입력해요.', duration: 75_000 },
+  { id: 'quiz', name: '뜻풀이 객관식 역전전', description: '순우리말과 한글 창제 이야기를 골라 배워요.', duration: 75_000 },
+  { id: 'repair', name: '바른말 수리공', description: '띄어쓰기를 제대로 해서 바른 문장을 완성해요.', duration: 60_000 },
   { id: 'relay', name: '훈민정음 랜덤 릴레이', description: '랜덤 대표 선수끼리 한글 문장으로 대결해요.', duration: 75_000 },
 ];
 
@@ -134,6 +230,10 @@ function sanitizeName(name) {
     .slice(0, 18);
 }
 
+function sanitizeCharacter(characterId) {
+  return CHARACTER_IDS.includes(characterId) ? characterId : 'bear';
+}
+
 function normalizeWord(value) {
   return String(value || '').normalize('NFKC').trim();
 }
@@ -154,13 +254,13 @@ function getPromptFor(player) {
   if (mode.id === 'word') {
     const index = player.progress.promptIndex % WORD_PROMPTS.length;
     const prompt = WORD_PROMPTS[index];
-    return { kind: 'word', id: `word-${index}`, word: prompt.word, length: [...prompt.word].length };
+    return { kind: 'word', id: `word-${index}`, word: prompt.word, category: prompt.category, length: [...prompt.word].length };
   }
 
   if (mode.id === 'quiz') {
     const index = player.progress.promptIndex % QUIZ_PROMPTS.length;
     const prompt = QUIZ_PROMPTS[index];
-    return { kind: 'quiz', id: `quiz-${index}`, meaning: prompt.meaning, choices: prompt.choices };
+    return { kind: 'quiz', id: `quiz-${index}`, category: prompt.category, meaning: prompt.meaning, choices: prompt.choices };
   }
 
   if (mode.id === 'repair') {
@@ -212,6 +312,7 @@ function publicStateFor(player) {
       id: player.id,
       name: player.name,
       team: player.team,
+      characterId: player.characterId,
       isHost: player.isHost,
       spectator: player.spectator,
     } : null,
@@ -219,6 +320,7 @@ function publicStateFor(player) {
       id: entry.id,
       name: entry.name,
       team: entry.team,
+      characterId: entry.characterId,
       isHost: entry.isHost,
       spectator: entry.spectator,
       connected: entry.ws.readyState === entry.ws.OPEN,
@@ -432,6 +534,7 @@ function handleTypedAnswer(player, answer) {
     word: mode.id === 'word' ? source.word : undefined,
     meaning: mode.id === 'word' ? source.meaning : undefined,
     example: mode.id === 'word' ? source.example : undefined,
+    category: mode.id === 'word' ? source.category : undefined,
     correctAnswer: mode.id === 'repair' ? source.answer : undefined,
     explanation: mode.id === 'repair' ? source.explanation : undefined,
   });
@@ -456,6 +559,8 @@ function handleChoice(player, choice) {
     score,
     answer: prompt.answer,
     meaning: prompt.meaning,
+    category: prompt.category,
+    explanation: prompt.explanation,
   });
   broadcast();
 }
@@ -521,12 +626,13 @@ function joinPlayer(ws, message) {
     ws,
     name,
     team,
+    characterId: sanitizeCharacter(message.characterId),
     isHost: players.size === 0,
     spectator: false,
     progress: { promptIndex: 0, promptStartedAt: 0 },
   };
   players.set(player.id, player);
-  send(ws, { type: 'joined', player: { id: player.id, name: player.name, team: player.team, isHost: player.isHost } });
+  send(ws, { type: 'joined', player: { id: player.id, name: player.name, team: player.team, characterId: player.characterId, isHost: player.isHost } });
   broadcast();
 }
 

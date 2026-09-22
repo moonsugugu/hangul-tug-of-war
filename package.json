@@ -9,6 +9,7 @@
     "start": "node server/index.js"
   },
   "dependencies": {
+    "three": "^0.186.0",
     "ws": "^8.18.3"
   },
   "devDependencies": {
