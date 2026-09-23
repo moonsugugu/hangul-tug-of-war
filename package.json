@@ -9,6 +9,7 @@
     "start": "node server/index.js"
   },
   "dependencies": {
+    "qrcode": "^1.5.4",
     "three": "^0.186.0",
     "ws": "^8.18.3"
   },

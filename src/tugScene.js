@@ -13,6 +13,16 @@ const ASSET_URLS = {
 
 const imageCache = new Map();
 const trimRectCache = new Map();
+// Fallback height when a team has no active pulling sprite.
+const ROPE_Y = -1.39;
+const ROPE_Z = 1.34;
+const ROPE_TRAVEL = 1.15;
+// Height of the baked-in rope tip relative to each tug sprite's center.
+// The four rows in the two supplied sheets use different grip heights.
+const GRIP_Y_OFFSETS = {
+  blue: [-0.44, -0.62, -0.28, -0.25],
+  white: [-0.49, -0.5, -0.32, -0.28],
+};
 const CHARACTER_ROWS = {
   rabbit: 0,
   bear: 0,
@@ -94,12 +104,16 @@ function alphaTrimRect(image, rect, padding = 5) {
   return trimmed;
 }
 
-function cropTexture(image, rect) {
+function cropTexture(image, rect, flipX = false) {
   const canvas = document.createElement('canvas');
   canvas.width = rect.w;
   canvas.height = rect.h;
   const context = canvas.getContext('2d');
   context.clearRect(0, 0, rect.w, rect.h);
+  if (flipX) {
+    context.translate(rect.w, 0);
+    context.scale(-1, 1);
+  }
   context.drawImage(image, rect.x, rect.y, rect.w, rect.h, 0, 0, rect.w, rect.h);
   const texture = new THREE.CanvasTexture(canvas);
   texture.colorSpace = THREE.SRGBColorSpace;
@@ -131,9 +145,9 @@ function makeSprite(texture, width, height, scale = 1, z = 0) {
   return sprite;
 }
 
-function addCroppedSprite(parent, image, rect, pixelUnit, scale, position, z, padding = 5) {
+function addCroppedSprite(parent, image, rect, pixelUnit, scale, position, z, padding = 5, flipX = false) {
   const trimmedRect = alphaTrimRect(image, rect, padding);
-  const texture = cropTexture(image, trimmedRect);
+  const texture = cropTexture(image, trimmedRect, flipX);
   const sprite = makeSprite(texture, trimmedRect.w * pixelUnit, trimmedRect.h * pixelUnit, scale, z);
   sprite.position.set(...position);
   parent?.add(sprite);
@@ -158,18 +172,98 @@ function addFullImagePlane(scene, image, viewWidth, viewHeight) {
   return plane;
 }
 
-function createRope(images, pixelUnit) {
-  // The second rope row includes the blue-and-white center ribbon from the supplied prop sheet.
-  const rope = addCroppedSprite(null, images.props, { x: 18, y: 137, w: 1040, h: 175 }, pixelUnit, 0.88, [0, -0.55, 1.32], 1.32);
-  rope.name = 'supplied-braided-rope';
+function updateRopeSegment(sprite, start, end, thickness) {
+  const dx = end.x - start.x;
+  const dy = end.y - start.y;
+  const length = Math.max(0.05, Math.hypot(dx, dy));
+  sprite.position.set((start.x + end.x) / 2, (start.y + end.y) / 2, ROPE_Z);
+  sprite.rotation.z = Math.atan2(dy, dx);
+  // Let the drawn rope tuck under the short rope tails in each sprite.
+  sprite.scale.set(length + 0.18, thickness, 1);
+}
+
+function createRope(images, pixelUnit, layout) {
+  const rope = new THREE.Group();
+  rope.name = 'dynamic-braided-rope';
+
+  // Only use the uninterrupted braid. The white bindings and frayed ends in
+  // the source art made the joins with the characters look like extra borders.
+  const ropeRect = alphaTrimRect(images.props, { x: 160, y: 52, w: 740, h: 84 }, 1);
+  const ropeTexture = cropTexture(images.props, ropeRect);
+  ropeTexture.wrapS = THREE.RepeatWrapping;
+  ropeTexture.repeat.x = (layout.rightAttachX - layout.leftAttachX) / 7.5;
+  ropeTexture.needsUpdate = true;
+  const ropeMaterial = new THREE.SpriteMaterial({
+    map: ropeTexture,
+    transparent: true,
+    depthTest: true,
+    depthWrite: false,
+  });
+  const ropeSegment = new THREE.Sprite(ropeMaterial);
+  ropeSegment.name = 'continuous-rope-segment';
+  rope.add(ropeSegment);
+
+  // The ribbon-only cutout avoids drawing a second rope and a bulky knot
+  // across the middle of the single continuous braid.
+  const marker = addCroppedSprite(
+    rope,
+    images.props,
+    { x: 1125, y: 286, w: 120, h: 190 },
+    pixelUnit,
+    Math.max(0.42, 0.5 * layout.scaleFactor),
+    [0, ROPE_Y - 0.31, ROPE_Z + 0.08],
+    ROPE_Z + 0.08,
+    2,
+  );
+  marker.name = 'moving-rope-ribbon';
+
+  rope.userData.update = (shiftX, shiftY) => {
+    const left = { x: layout.leftAttachX + shiftX, y: layout.gripY + shiftY };
+    const right = { x: layout.rightAttachX + shiftX, y: layout.gripY + shiftY };
+    const centerY = layout.gripY + shiftY;
+    updateRopeSegment(ropeSegment, left, right, layout.ropeThickness);
+    marker.position.x = shiftX;
+    marker.position.y = centerY - 0.28;
+  };
+
+  rope.userData.update(0, 0);
   return rope;
 }
 
-function createCharacters(scene, images, data, pixelUnit) {
+function getCrowdLayout(data) {
+  const activePlayers = (data.players || []).filter((player) => !player.spectator);
+  const blueCount = activePlayers.filter((player) => player.team === 'blue').length;
+  const whiteCount = activePlayers.filter((player) => player.team === 'white').length;
+  const scaleFactor = 1 - Math.min(28, Math.max(0, activePlayers.length - 2)) * (0.6 / 28);
+  const gapFor = (count) => Math.min(1.45, 5.2 / Math.max(1, count));
+  const attachFor = (count) => 4.4 + Math.max(0, count - 1) * gapFor(count) / 2 - 0.7 * scaleFactor;
+  return {
+    characterScale: 0.86 * scaleFactor,
+    scaleFactor,
+    gripY: -1.54 - (1 - scaleFactor) * 0.58,
+    leftAttachX: -attachFor(blueCount),
+    rightAttachX: attachFor(whiteCount),
+    ropeThickness: 0.27 * (0.7 + 0.3 * scaleFactor),
+  };
+}
+
+function createCharacters(scene, images, data, pixelUnit, layout) {
   const characters = [];
   const sheetInfo = {
-    blue: { image: images.blueMascots, columns: 5, rows: 4, tugColumn: 3, cheerColumn: 4 },
-    white: { image: images.whiteMascots, columns: 6, rows: 4, tugColumn: 4, cheerColumn: 5 },
+    // The supplied pull poses extend beyond their nominal grid cells so the
+    // rope tail is not clipped before it reaches the dynamic center rope.
+    blue: {
+      image: images.blueMascots,
+      columns: 5,
+      rows: 4,
+      tugRect: (row) => gridRect(images.blueMascots, 5, 4, 3, row, 2),
+    },
+    white: {
+      image: images.whiteMascots,
+      columns: 6,
+      rows: 4,
+      tugRect: (row) => gridRect(images.whiteMascots, 6, 4, 4, row, 2),
+    },
   };
 
   for (const team of ['blue', 'white']) {
@@ -181,22 +275,12 @@ function createCharacters(scene, images, data, pixelUnit) {
     players.forEach((player, index) => {
       const offset = index - (players.length - 1) / 2;
       const row = CHARACTER_ROWS[player.characterId] ?? 0;
-      const baseX = side * 4.75 - side * offset * gap;
-      const baseY = -1.1 + (index % 2) * 0.08;
-      const tugRect = gridRect(info.image, info.columns, info.rows, info.tugColumn, row, 3);
-      const cheerRect = gridRect(info.image, info.columns, info.rows, info.cheerColumn, row, 3);
-      const tug = addCroppedSprite(scene, info.image, tugRect, pixelUnit, 0.86, [baseX, baseY, 1.12], 1.12);
-      const cheer = addCroppedSprite(scene, info.image, cheerRect, pixelUnit, 0.86, [baseX, baseY, 1.12], 1.12);
-      if (team === 'white') {
-        // The supplied white-team tug pose pulls toward the right. Mirror it
-        // so the rope points into the center line from the right-hand side.
-        tug.scale.x *= -1;
-        cheer.scale.x *= -1;
-      }
-      cheer.visible = false;
+      const baseX = side * 4.4 - side * offset * gap;
+      const baseY = layout.gripY - GRIP_Y_OFFSETS[team][row] * layout.scaleFactor;
+      const tugRect = info.tugRect?.(row) || gridRect(info.image, info.columns, info.rows, info.tugColumn, row, 3);
+      const tug = addCroppedSprite(scene, info.image, tugRect, pixelUnit, layout.characterScale, [baseX, baseY, 1.12], 1.12, 3, team === 'white');
       tug.name = `${team}-${player.characterId}-tug`;
-      cheer.name = `${team}-${player.characterId}-cheer`;
-      characters.push({ tug, cheer, baseX, baseY, side, phase: index * 0.8 + Math.random() * 0.8 });
+      characters.push({ tug, team, baseX, baseY, footY: baseY - 1.05 * layout.scaleFactor });
     });
   }
   return characters;
@@ -235,12 +319,32 @@ function createTeamBanners(scene, images, pixelUnit) {
   return [blueFlag, whiteFlag];
 }
 
-function createDust(scene, images, pixelUnit) {
-  const dust = addCroppedSprite(scene, images.props, { x: 295, y: 420, w: 330, h: 205 }, pixelUnit, 0.72, [0, -1.48, 1.24], 1.24);
-  dust.name = 'tug-dust-effect';
-  dust.material.opacity = 0.72;
-  dust.visible = false;
-  return dust;
+function createFootDust(scene, characters, scaleFactor) {
+  const canvas = document.createElement('canvas');
+  canvas.width = 64;
+  canvas.height = 64;
+  const context = canvas.getContext('2d');
+  const haze = context.createRadialGradient(32, 32, 2, 32, 32, 31);
+  haze.addColorStop(0, 'rgba(245, 208, 148, 0.8)');
+  haze.addColorStop(0.55, 'rgba(238, 189, 119, 0.35)');
+  haze.addColorStop(1, 'rgba(238, 189, 119, 0)');
+  context.fillStyle = haze;
+  context.fillRect(0, 0, 64, 64);
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  const puffs = [];
+  characters.forEach(({ baseX, footY, team }) => {
+    for (let index = 0; index < 2; index += 1) {
+      const material = new THREE.SpriteMaterial({ map: texture, transparent: true, opacity: 0, depthWrite: false });
+      const sprite = new THREE.Sprite(material);
+      sprite.name = `${team}-foot-dust-${index}`;
+      sprite.position.set(baseX + (index ? 0.42 : -0.32) * scaleFactor, footY, 1.16);
+      sprite.scale.set(0.34 * scaleFactor, 0.2 * scaleFactor, 1);
+      scene.add(sprite);
+      puffs.push({ sprite, baseX, footY, index });
+    }
+  });
+  return puffs;
 }
 
 export function mountTugScene(container, data) {
@@ -265,11 +369,15 @@ export function mountTugScene(container, data) {
   let disposed = false;
   let animationId = 0;
   let resizeObserver;
-  let targetRopeX = ((Number(data.ropePosition || 50) - 50) / 50) * 2.65;
+  let targetRopeX = ((Number(data.ropePosition ?? 50) - 50) / 50) * ROPE_TRAVEL;
   let currentRopeX = targetRopeX;
   let rope;
-  let dust;
+  let footDust = [];
+  let pullStart = -Infinity;
+  let pullDirection = 0;
+  let pullStrength = 0;
   let characters = [];
+  let layout;
   let cheerleaders = [];
   let background;
   let built = false;
@@ -277,7 +385,7 @@ export function mountTugScene(container, data) {
   function resize() {
     const width = Math.max(320, container.clientWidth || 800);
     const height = Math.max(260, container.clientHeight || 430);
-    const viewHeight = 6.4;
+    const viewHeight = Math.max(6.4, 14.4 * height / width);
     const viewWidth = viewHeight * (width / height);
     camera.left = -viewWidth / 2;
     camera.right = viewWidth / 2;
@@ -293,13 +401,14 @@ export function mountTugScene(container, data) {
     if (disposed) return;
     const pixelUnit = 13.8 / 1448;
     background = addFullImagePlane(scene, images.arena, 14, 6.4);
-    rope = createRope(images, pixelUnit);
+    layout = getCrowdLayout(data);
+    characters = createCharacters(scene, images, data, pixelUnit, layout);
+    rope = createRope(images, pixelUnit, layout);
     scene.add(rope);
-    characters = createCharacters(scene, images, data, pixelUnit);
     createJudge(scene, images, pixelUnit);
     cheerleaders = createCheerleaders(scene, images, pixelUnit);
     createTeamBanners(scene, images, pixelUnit);
-    dust = createDust(scene, images, pixelUnit);
+    footDust = createFootDust(scene, characters, layout.scaleFactor);
     resize();
     built = true;
   }).catch((error) => {
@@ -314,26 +423,28 @@ export function mountTugScene(container, data) {
     animationId = requestAnimationFrame(animate);
     if (built) {
       currentRopeX = THREE.MathUtils.lerp(currentRopeX, targetRopeX, 0.08);
-      rope.position.x = currentRopeX;
-      rope.rotation.z = Math.sin(time * 0.003) * 0.008;
-      characters.forEach(({ tug, cheer, baseX, baseY, side, phase }, index) => {
-        const activeTug = Math.sin(time * 0.004 + phase) > -0.2;
-        tug.visible = activeTug;
-        cheer.visible = !activeTug;
-        const bounce = Math.sin(time * 0.005 + phase) * 0.035;
-        tug.position.x = baseX + side * Math.sin(time * 0.004 + index) * 0.045;
-        cheer.position.x = tug.position.x;
-        tug.position.y = baseY + bounce;
-        cheer.position.y = baseY + bounce;
+      const pullAge = time - pullStart;
+      const pullFade = Math.max(0, 1 - pullAge / 650);
+      const tugBounce = pullFade > 0
+        ? pullDirection * pullStrength * Math.sin(pullAge * 0.031) * pullFade * 0.065
+        : 0;
+      const pullMotionX = currentRopeX + Math.sin(time * 0.004) * 0.025 + tugBounce;
+      const pullMotionY = Math.sin(time * 0.005) * 0.012 + Math.abs(tugBounce) * 0.12;
+      rope.userData.update(pullMotionX, pullMotionY);
+      characters.forEach(({ tug, baseX, baseY }) => {
+        tug.position.x = baseX + pullMotionX;
+        tug.position.y = baseY + pullMotionY;
       });
       cheerleaders.forEach(({ sprite, baseY, phase }) => {
         sprite.position.y = baseY + Math.sin(time * 0.003 + phase) * 0.012;
       });
-      if (dust) {
-        dust.visible = Math.sin(time * 0.004) > 0.65;
-        dust.position.x = currentRopeX * 0.58;
-        dust.scale.x = 0.72 + Math.sin(time * 0.006) * 0.04;
-      }
+      footDust.forEach(({ sprite, baseX, footY, index }) => {
+        const progress = Math.min(1, Math.max(0, pullAge / 650));
+        sprite.material.opacity = pullFade * pullStrength * (index ? 0.25 : 0.35);
+        sprite.position.x = baseX + pullMotionX + ((index ? 0.42 : -0.32) + (index ? 1 : -1) * progress * 0.18) * layout.scaleFactor;
+        sprite.position.y = footY + progress * 0.14 * layout.scaleFactor;
+        sprite.scale.set((0.34 + progress * 0.23) * layout.scaleFactor, (0.2 + progress * 0.16) * layout.scaleFactor, 1);
+      });
     }
     renderer.render(scene, camera);
   }
@@ -361,7 +472,14 @@ export function mountTugScene(container, data) {
       renderer.dispose();
     },
     update(nextData) {
-      targetRopeX = ((Number(nextData.ropePosition || 50) - 50) / 50) * 2.65;
+      const nextTarget = ((Number(nextData.ropePosition ?? 50) - 50) / 50) * ROPE_TRAVEL;
+      const delta = nextTarget - targetRopeX;
+      if (Math.abs(delta) > 0.001) {
+        pullDirection = Math.sign(delta);
+        pullStrength = Math.min(1, Math.max(0.45, Math.abs(delta) / 0.14));
+        pullStart = performance.now();
+      }
+      targetRopeX = nextTarget;
     },
   };
 }

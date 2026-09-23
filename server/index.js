@@ -4,14 +4,23 @@ import { readFile, stat } from 'node:fs/promises';
 import { dirname, extname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
+import { networkInterfaces } from 'node:os';
 import { WebSocketServer } from 'ws';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const DIST = join(ROOT, 'dist');
 const PORT = Number(process.env.PORT || 8787);
+const PUBLIC_BASE_URL = String(process.env.PUBLIC_BASE_URL || '').replace(/\/+$/, '');
 const REFERENCE_CPM = 120;
 const RELAY_LIMIT_MS = 12_000;
-const ROUND_MULTIPLIERS = [1, 1.1, 1.3, 1.5];
+const ROUND_MULTIPLIERS = [1, 1.1, 1.3, 1.5, 1.5];
+const ROUND_DURATION_MS = Number(process.env.ROUND_DURATION_MS || 180_000);
+const OVERTIME_MS = Number(process.env.OVERTIME_MS || 10_000);
+const INTERMISSION_MS = Number(process.env.INTERMISSION_MS || 4_000);
+const WHEEL_DURATION_MS = Number(process.env.WHEEL_DURATION_MS || 7_000);
+const ROPE_MAX_STEPS = 10;
+const ROPE_POINTS_PER_STEP = 75;
+const MAX_PLAYERS_PER_ROOM = 30;
 const CHARACTER_IDS = ['rabbit', 'bear', 'cat', 'chick', 'panda', 'sheep', 'fox', 'penguin'];
 
 const WORD_PROMPTS = [
@@ -160,10 +169,10 @@ const RELAY_PROMPTS = [
 ];
 
 const MODES = [
-  { id: 'word', name: '말모이 기본전', description: '더 다양해진 순우리말을 빠르고 정확하게 입력해요.', duration: 75_000 },
-  { id: 'quiz', name: '뜻풀이 객관식 역전전', description: '순우리말과 한글 창제 이야기를 골라 배워요.', duration: 75_000 },
-  { id: 'repair', name: '바른말 수리공', description: '띄어쓰기를 제대로 해서 바른 문장을 완성해요.', duration: 60_000 },
-  { id: 'relay', name: '훈민정음 랜덤 릴레이', description: '랜덤 대표 선수끼리 한글 문장으로 대결해요.', duration: 75_000 },
+  { id: 'word', name: '말모이 기본전', description: '더 다양해진 순우리말을 빠르고 정확하게 입력해요.', duration: ROUND_DURATION_MS },
+  { id: 'quiz', name: '뜻풀이 객관식 역전전', description: '순우리말과 한글 창제 이야기를 골라 배워요.', duration: ROUND_DURATION_MS },
+  { id: 'repair', name: '바른말 수리공', description: '띄어쓰기를 제대로 해서 바른 문장을 완성해요.', duration: ROUND_DURATION_MS },
+  { id: 'relay', name: '훈민정음 랜덤 릴레이', description: '랜덤 대표 선수끼리 한글 문장으로 대결해요.', duration: ROUND_DURATION_MS },
 ];
 
 const MIME_TYPES = {
@@ -175,18 +184,22 @@ const MIME_TYPES = {
   '.ico': 'image/x-icon',
 };
 
-const players = new Map();
-let game = createGame();
+const rooms = new Map();
+const socketRooms = new Map();
 let lastBroadcastAt = 0;
 
 function createGame() {
   return {
     phase: 'lobby',
     roundIndex: -1,
+    modeIndex: -1,
     mode: null,
     roundStartedAt: 0,
     roundEndsAt: 0,
     intermissionUntil: 0,
+    wheelEndsAt: 0,
+    wheelSelectedIndex: null,
+    overtimeCount: 0,
     scores: { blue: 0, white: 0 },
     rawScores: { blue: 0, white: 0 },
     roundScores: [],
@@ -198,23 +211,76 @@ function createGame() {
   };
 }
 
-function getActivePlayers() {
-  return [...players.values()].filter((player) => !player.spectator);
+function createRoomId() {
+  const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  let roomId = '';
+  do {
+    roomId = Array.from({ length: 6 }, () => alphabet[Math.floor(Math.random() * alphabet.length)]).join('');
+  } while (rooms.has(roomId));
+  return roomId;
 }
 
-function getCounts() {
+function createRoom() {
+  const room = {
+    id: createRoomId(),
+    game: createGame(),
+    players: new Map(),
+    createdAt: Date.now(),
+  };
+  rooms.set(room.id, room);
+  return room;
+}
+
+function normalizeRoomId(value) {
+  return String(value || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 6);
+}
+
+function getLanAddress() {
+  const interfaces = networkInterfaces();
+  for (const entries of Object.values(interfaces)) {
+    const address = entries?.find((entry) => !entry.internal && (entry.family === 'IPv4' || entry.family === 4));
+    if (address?.address) return address.address;
+  }
+  return '127.0.0.1';
+}
+
+function getRoomUrl(roomId) {
+  const baseUrl = PUBLIC_BASE_URL || `http://${getLanAddress()}:${PORT}`;
+  return `${baseUrl}/?room=${encodeURIComponent(roomId)}`;
+}
+
+function getRoomBySocket(ws) {
+  const roomId = socketRooms.get(ws);
+  return roomId ? rooms.get(roomId) : null;
+}
+
+function getPlayerBySocket(ws) {
+  const room = getRoomBySocket(ws);
+  return room ? [...room.players.values()].find((player) => player.ws === ws) : null;
+}
+
+function getRoomForPlayer(player) {
+  return player ? rooms.get(player.roomId) : null;
+}
+
+function getActivePlayers(room) {
+  return [...room.players.values()].filter((player) => !player.spectator);
+}
+
+function getCounts(room) {
+  const game = room.game;
   if (game.phase !== 'lobby' && game.rosterCounts.blue + game.rosterCounts.white > 0) {
     return { ...game.rosterCounts };
   }
 
-  return getActivePlayers().reduce((counts, player) => {
+  return getActivePlayers(room).reduce((counts, player) => {
     counts[player.team] += 1;
     return counts;
   }, { blue: 0, white: 0 });
 }
 
-function getMultipliers() {
-  const counts = getCounts();
+function getMultipliers(room) {
+  const counts = getCounts(room);
   const target = Math.max(counts.blue, counts.white, 1);
   return {
     blue: counts.blue ? target / counts.blue : 1,
@@ -242,13 +308,15 @@ function normalizeSentence(value) {
   return String(value || '').normalize('NFKC').replace(/\r/g, '').trim();
 }
 
-function getMode() {
-  return MODES[game.roundIndex] || null;
+function getMode(room) {
+  const game = room.game;
+  return MODES[game.modeIndex] || null;
 }
 
-function getPromptFor(player) {
+function getPromptFor(room, player) {
+  const game = room.game;
   if (game.phase !== 'round' || !player || player.spectator) return null;
-  const mode = getMode();
+  const mode = getMode(room);
   if (!mode) return null;
 
   if (mode.id === 'word') {
@@ -283,29 +351,45 @@ function getPromptFor(player) {
   return null;
 }
 
-function publicStateFor(player) {
-  const counts = getCounts();
-  const multipliers = getMultipliers();
-  const total = game.scores.blue + game.scores.white;
+function publicStateFor(room, player) {
+  const game = room.game;
+  const counts = getCounts(room);
+  const multipliers = getMultipliers(room);
   const difference = game.scores.blue - game.scores.white;
-  const ropePosition = Math.max(7, Math.min(93, 50 + (difference / Math.max(total, 100)) * 38));
-  const mode = getMode();
+  // One visible step is roughly one accurate answer. Either team can pull the
+  // center marker through all ten steps, even if the other team has no score.
+  const ropeStep = Math.max(-ROPE_MAX_STEPS, Math.min(ROPE_MAX_STEPS, -Math.round(difference / ROPE_POINTS_PER_STEP)));
+  const ropePosition = 50 + ropeStep * (43 / ROPE_MAX_STEPS);
+  const mode = getMode(room);
 
   return {
     type: 'state',
+    roomId: room.id,
+    roomUrl: getRoomUrl(room.id),
+    maxPlayers: MAX_PLAYERS_PER_ROOM,
     phase: game.phase,
     roundIndex: game.roundIndex,
     roundNumber: game.roundIndex + 1,
-    totalRounds: MODES.length,
+    totalRounds: game.roundIndex === MODES.length || game.wheelSelectedIndex !== null ? MODES.length + 1 : MODES.length,
     mode: mode ? { ...mode } : null,
     timeRemainingMs: game.phase === 'round' ? Math.max(0, game.roundEndsAt - Date.now()) : 0,
     intermissionRemainingMs: game.phase === 'intermission' ? Math.max(0, game.intermissionUntil - Date.now()) : 0,
+    wheelRemainingMs: game.phase === 'wheel' ? Math.max(0, game.wheelEndsAt - Date.now()) : 0,
+    wheelDurationMs: WHEEL_DURATION_MS,
+    wheelSelectedIndex: game.wheelSelectedIndex,
+    overtimeCount: game.overtimeCount,
     scores: game.scores,
     rawScores: game.rawScores,
     roundScores: game.roundScores,
+    roundWins: {
+      blue: game.roundScores.filter((round) => round.winner === 'blue').length,
+      white: game.roundScores.filter((round) => round.winner === 'white').length,
+    },
     counts,
     multipliers,
     ropePosition,
+    ropeStep,
+    ropeMaxSteps: ROPE_MAX_STEPS,
     winner: game.winner,
     notice: game.notice,
     self: player ? {
@@ -316,7 +400,7 @@ function publicStateFor(player) {
       isHost: player.isHost,
       spectator: player.spectator,
     } : null,
-    players: [...players.values()].map((entry) => ({
+    players: [...room.players.values()].map((entry) => ({
       id: entry.id,
       name: entry.name,
       team: entry.team,
@@ -325,7 +409,7 @@ function publicStateFor(player) {
       spectator: entry.spectator,
       connected: entry.ws.readyState === entry.ws.OPEN,
     })),
-    prompt: getPromptFor(player),
+    prompt: getPromptFor(room, player),
     relay: game.relay ? {
       blueId: game.relay.blueId,
       whiteId: game.relay.whiteId,
@@ -342,37 +426,38 @@ function send(ws, payload) {
   if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(payload));
 }
 
-function broadcast() {
-  for (const player of players.values()) {
-    send(player.ws, publicStateFor(player));
+function broadcast(room) {
+  if (!room || !rooms.has(room.id)) return;
+  for (const player of room.players.values()) {
+    send(player.ws, publicStateFor(room, player));
   }
   lastBroadcastAt = Date.now();
 }
 
-function getPlayerBySocket(ws) {
-  return [...players.values()].find((player) => player.ws === ws);
-}
-
-function setNotice(text) {
+function setNotice(room, text) {
+  const game = room.game;
   game.notice = text;
   setTimeout(() => {
-    if (game.notice === text) {
+    if (rooms.get(room.id) === room && game.notice === text) {
       game.notice = '';
-      broadcast();
+      broadcast(room);
     }
   }, 3_000);
 }
 
-function addTeamScore(team, score) {
-  const multiplier = getMultipliers()[team];
+function checkRopeWin(room) {
+  const ropeStep = publicStateFor(room, null).ropeStep;
+  if (Math.abs(ropeStep) === ROPE_MAX_STEPS) finishRound(room, 'rope');
+}
+
+function addTeamScore(room, team, score, checkWin = true) {
+  const game = room.game;
+  const multiplier = getMultipliers(room)[team];
   const weighted = Math.max(0, score) * ROUND_MULTIPLIERS[game.roundIndex];
   game.rawScores[team] += weighted;
   game.scores[team] += weighted * multiplier;
 
-  const ropePosition = publicStateFor(null).ropePosition;
-  if (ropePosition <= 7 || ropePosition >= 93) {
-    endGame(ropePosition >= 93 ? 'blue' : 'white');
-  }
+  if (checkWin) checkRopeWin(room);
 }
 
 function calculateTypedScore(input, expected, elapsedMs, mode = 'word') {
@@ -399,69 +484,105 @@ function calculateTypedScore(input, expected, elapsedMs, mode = 'word') {
   };
 }
 
-function resetPlayerProgress() {
+function resetPlayerProgress(room) {
   const now = Date.now();
-  for (const player of getActivePlayers()) {
+  for (const player of getActivePlayers(room)) {
     player.progress = { promptIndex: 0, promptStartedAt: now };
   }
 }
 
-function beginRound(index) {
-  const mode = MODES[index];
+function beginRound(room, index) {
+  const game = room.game;
+  const modeIndex = index === MODES.length ? game.wheelSelectedIndex : index;
+  const mode = MODES[modeIndex];
   if (!mode) return;
 
   game.phase = 'round';
   game.roundIndex = index;
+  game.modeIndex = modeIndex;
   game.mode = mode.id;
   game.roundStartedAt = Date.now();
-  game.roundEndsAt = Date.now() + mode.duration;
-  game.notice = `${index + 1}라운드 · ${mode.name}`;
+  game.roundEndsAt = game.roundStartedAt + mode.duration;
+  game.overtimeCount = 0;
+  game.scores = { blue: 0, white: 0 };
+  game.rawScores = { blue: 0, white: 0 };
+  game.notice = `${index === MODES.length ? '결승' : `${index + 1}라운드`} · ${mode.name}`;
   game.relay = null;
   game.relayUsed = { blue: new Set(), white: new Set() };
-  resetPlayerProgress();
+  resetPlayerProgress(room);
 
-  if (mode.id === 'relay') startRelayDuel();
-  broadcast();
+  if (mode.id === 'relay') startRelayDuel(room);
+  broadcast(room);
 }
 
-function finishRound() {
+function finishRound(room, reason = 'time') {
+  const game = room.game;
   if (game.phase !== 'round') return;
+  const bluePoints = Math.round(game.scores.blue);
+  const whitePoints = Math.round(game.scores.white);
+  if (bluePoints === whitePoints) {
+    game.overtimeCount += 1;
+    game.roundEndsAt = Date.now() + OVERTIME_MS;
+    game.notice = `동점! ${Math.round(OVERTIME_MS / 1000)}초 연장전이 시작됩니다.`;
+    broadcast(room);
+    return;
+  }
+  const winner = bluePoints > whitePoints ? 'blue' : 'white';
   const roundScore = {
     round: game.roundIndex + 1,
-    mode: getMode()?.name || '',
-    blue: Math.round(game.scores.blue - (game.roundScores.reduce((sum, item) => sum + item.blue, 0))),
-    white: Math.round(game.scores.white - (game.roundScores.reduce((sum, item) => sum + item.white, 0))),
+    mode: getMode(room)?.name || '',
+    blue: bluePoints,
+    white: whitePoints,
+    winner,
+    reason,
+    overtimeCount: game.overtimeCount,
   };
   game.roundScores.push(roundScore);
   game.relay = null;
 
-  if (game.roundIndex >= MODES.length - 1) {
-    const winner = game.scores.blue === game.scores.white ? 'draw' : game.scores.blue > game.scores.white ? 'blue' : 'white';
-    endGame(winner);
+  if (game.roundIndex === MODES.length) {
+    endGame(room, winner);
+    return;
+  }
+
+  if (game.roundIndex === MODES.length - 1) {
+    const blueWins = game.roundScores.filter((round) => round.winner === 'blue').length;
+    const whiteWins = game.roundScores.filter((round) => round.winner === 'white').length;
+    if (blueWins !== whiteWins) {
+      endGame(room, blueWins > whiteWins ? 'blue' : 'white');
+      return;
+    }
+    game.phase = 'wheel';
+    game.wheelSelectedIndex = Math.floor(Math.random() * MODES.length);
+    game.wheelEndsAt = Date.now() + WHEEL_DURATION_MS;
+    game.notice = '2:2 동점! 돌림판으로 결승 종목을 정합니다.';
+    broadcast(room);
     return;
   }
 
   game.phase = 'intermission';
-  game.intermissionUntil = Date.now() + 4_000;
-  game.notice = `${game.roundIndex + 1}라운드 종료 · 다음 라운드를 준비하세요.`;
-  broadcast();
+  game.intermissionUntil = Date.now() + INTERMISSION_MS;
+  game.notice = `${game.roundIndex + 1}라운드 ${winner === 'blue' ? '청팀' : '백팀'} 승리! 다음 라운드를 준비하세요.`;
+  broadcast(room);
 }
 
-function endGame(winner) {
+function endGame(room, winner) {
+  const game = room.game;
   if (game.phase === 'results') return;
   game.phase = 'results';
   game.winner = winner;
   game.roundEndsAt = 0;
   game.relay = null;
-  game.notice = winner === 'draw' ? '무승부! 두 팀 모두 멋진 한글 실력을 보여주었어요.' : `${winner === 'blue' ? '청팀' : '백팀'} 승리!`;
-  broadcast();
+  game.notice = `${winner === 'blue' ? '청팀' : '백팀'} 최종 승리!`;
+  broadcast(room);
 }
 
-function startRelayDuel() {
+function startRelayDuel(room) {
+  const game = room.game;
   if (game.phase !== 'round' || game.mode !== 'relay') return;
   const byTeam = {
-    blue: getActivePlayers().filter((player) => player.team === 'blue'),
-    white: getActivePlayers().filter((player) => player.team === 'white'),
+    blue: getActivePlayers(room).filter((player) => player.team === 'blue'),
+    white: getActivePlayers(room).filter((player) => player.team === 'white'),
   };
   if (!byTeam.blue.length || !byTeam.white.length) return;
 
@@ -487,10 +608,11 @@ function startRelayDuel() {
     submissions: {},
     lastResult: null,
   };
-  broadcast();
+  broadcast(room);
 }
 
-function finishRelayDuel() {
+function finishRelayDuel(room) {
+  const game = room.game;
   const relay = game.relay;
   if (!relay || relay.lastResult) return;
 
@@ -499,21 +621,26 @@ function finishRelayDuel() {
   const blueScore = blue?.exact ? Math.max(0, 60 + Math.min(40, 40 * (1 - blue.elapsedMs / RELAY_LIMIT_MS))) : 0;
   const whiteScore = white?.exact ? Math.max(0, 60 + Math.min(40, 40 * (1 - white.elapsedMs / RELAY_LIMIT_MS))) : 0;
 
-  if (blueScore) addTeamScore('blue', blueScore);
-  if (whiteScore) addTeamScore('white', whiteScore);
+  if (blueScore) addTeamScore(room, 'blue', blueScore, false);
+  if (whiteScore) addTeamScore(room, 'white', whiteScore, false);
+  checkRopeWin(room);
 
   const winner = blueScore === whiteScore ? 'draw' : blueScore > whiteScore ? 'blue' : 'white';
   relay.lastResult = { winner, blueScore, whiteScore };
-  broadcast();
+  broadcast(room);
 
   setTimeout(() => {
-    if (game.phase === 'round' && game.mode === 'relay') startRelayDuel();
+    if (rooms.get(room.id) === room && game.phase === 'round' && game.mode === 'relay') startRelayDuel(room);
   }, 1_800);
 }
 
 function handleTypedAnswer(player, answer) {
-  if (game.phase !== 'round' || !player.progress || !getMode()) return;
-  const mode = getMode();
+  const room = getRoomForPlayer(player);
+  if (!room) return;
+  const game = room.game;
+  if (game.phase !== 'round' || !player.progress || !getMode(room)) return;
+  if (Date.now() >= game.roundEndsAt) return finishRound(room);
+  const mode = getMode(room);
   if (!['word', 'repair'].includes(mode.id)) return;
 
   const index = player.progress.promptIndex % (mode.id === 'word' ? WORD_PROMPTS.length : REPAIR_PROMPTS.length);
@@ -521,7 +648,7 @@ function handleTypedAnswer(player, answer) {
   const expected = mode.id === 'word' ? source.word : source.answer;
   const elapsedMs = Date.now() - player.progress.promptStartedAt;
   const result = calculateTypedScore(answer, expected, elapsedMs, mode.id);
-  addTeamScore(player.team, result.score);
+  addTeamScore(room, player.team, result.score);
   player.progress.promptIndex += 1;
   player.progress.promptStartedAt = Date.now();
 
@@ -538,11 +665,15 @@ function handleTypedAnswer(player, answer) {
     correctAnswer: mode.id === 'repair' ? source.answer : undefined,
     explanation: mode.id === 'repair' ? source.explanation : undefined,
   });
-  broadcast();
+  broadcast(room);
 }
 
 function handleChoice(player, choice) {
-  if (game.phase !== 'round' || getMode()?.id !== 'quiz') return;
+  const room = getRoomForPlayer(player);
+  if (!room) return;
+  const game = room.game;
+  if (game.phase !== 'round' || getMode(room)?.id !== 'quiz') return;
+  if (Date.now() >= game.roundEndsAt) return finishRound(room);
   const index = player.progress.promptIndex % QUIZ_PROMPTS.length;
   const prompt = QUIZ_PROMPTS[index];
   const elapsedMs = Date.now() - player.progress.promptStartedAt;
@@ -550,7 +681,7 @@ function handleChoice(player, choice) {
   const speedBonus = Math.max(0, 40 * (1 - Math.min(elapsedMs, 8_000) / 8_000));
   const score = correct ? 60 + speedBonus : 0;
 
-  addTeamScore(player.team, score);
+  addTeamScore(room, player.team, score);
   player.progress.promptIndex += 1;
   player.progress.promptStartedAt = Date.now();
   send(player.ws, {
@@ -562,12 +693,16 @@ function handleChoice(player, choice) {
     category: prompt.category,
     explanation: prompt.explanation,
   });
-  broadcast();
+  broadcast(room);
 }
 
 function handleRelayAnswer(player, answer) {
+  const room = getRoomForPlayer(player);
+  if (!room) return;
+  const game = room.game;
   const relay = game.relay;
   if (game.phase !== 'round' || game.mode !== 'relay' || !relay) return;
+  if (Date.now() >= game.roundEndsAt) return finishRound(room);
   const team = relay.blueId === player.id ? 'blue' : relay.whiteId === player.id ? 'white' : null;
   if (!team || relay.submissions[team]) return;
 
@@ -577,39 +712,61 @@ function handleRelayAnswer(player, answer) {
     elapsedMs,
   };
   send(player.ws, { type: 'relayAnswerResult', correct: relay.submissions[team].exact });
-  if (relay.submissions.blue && relay.submissions.white) finishRelayDuel();
-  else broadcast();
+  if (relay.submissions.blue && relay.submissions.white) finishRelayDuel(room);
+  else broadcast(room);
 }
 
 function startGame(player) {
+  const room = getRoomForPlayer(player);
+  if (!room) return;
+  const game = room.game;
   if (!player.isHost || game.phase !== 'lobby') return;
-  const counts = getCounts();
+  const counts = getCounts(room);
   if (counts.blue < 1 || counts.white < 1) {
     send(player.ws, { type: 'error', message: '청팀과 백팀에 각각 한 명 이상 있어야 시작할 수 있어요.' });
     return;
   }
 
-  game = createGame();
-  game.rosterCounts = counts;
-  for (const entry of players.values()) {
+  room.game = createGame();
+  room.game.rosterCounts = counts;
+  for (const entry of room.players.values()) {
     entry.spectator = false;
   }
-  beginRound(0);
+  beginRound(room, 0);
 }
 
 function resetToLobby(player) {
+  const room = getRoomForPlayer(player);
+  if (!room) return;
   if (!player.isHost) return;
-  game = createGame();
-  for (const entry of players.values()) {
+  room.game = createGame();
+  for (const entry of room.players.values()) {
     entry.spectator = false;
     entry.progress = { promptIndex: 0, promptStartedAt: 0 };
   }
-  broadcast();
+  broadcast(room);
 }
 
 function joinPlayer(ws, message) {
+  if (getPlayerBySocket(ws)) {
+    send(ws, { type: 'error', message: '이미 방에 들어와 있어요.' });
+    return;
+  }
+
+  const roomId = normalizeRoomId(message.roomId);
+  const room = rooms.get(roomId);
+  if (!room) {
+    send(ws, { type: 'error', message: '방을 찾을 수 없어요. 방 코드가 맞는지 확인해 주세요.' });
+    return;
+  }
+
+  const game = room.game;
   if (game.phase !== 'lobby') {
     send(ws, { type: 'error', message: '게임이 이미 진행 중입니다. 다음 게임을 기다려 주세요.' });
+    return;
+  }
+  if (room.players.size >= MAX_PLAYERS_PER_ROOM) {
+    send(ws, { type: 'error', message: '이 방은 최대 30명까지 참여할 수 있어요.' });
     return;
   }
 
@@ -619,21 +776,40 @@ function joinPlayer(ws, message) {
     return;
   }
 
-  const counts = getCounts();
+  const counts = getCounts(room);
   const team = counts.blue <= counts.white ? 'blue' : 'white';
   const player = {
     id: randomUUID(),
+    roomId,
     ws,
     name,
     team,
     characterId: sanitizeCharacter(message.characterId),
-    isHost: players.size === 0,
+    isHost: room.players.size === 0,
     spectator: false,
     progress: { promptIndex: 0, promptStartedAt: 0 },
   };
-  players.set(player.id, player);
-  send(ws, { type: 'joined', player: { id: player.id, name: player.name, team: player.team, characterId: player.characterId, isHost: player.isHost } });
-  broadcast();
+  room.players.set(player.id, player);
+  socketRooms.set(ws, roomId);
+  send(ws, { type: 'joined', roomId, roomUrl: getRoomUrl(roomId), player: { id: player.id, name: player.name, team: player.team, characterId: player.characterId, isHost: player.isHost } });
+  broadcast(room);
+}
+
+function createRoomAndJoin(ws, message) {
+  if (getPlayerBySocket(ws)) {
+    send(ws, { type: 'error', message: '이미 방에 들어와 있어요.' });
+    return;
+  }
+
+  const name = sanitizeName(message.name);
+  if (!name) {
+    send(ws, { type: 'error', message: '닉네임을 한 글자 이상 입력해 주세요.' });
+    return;
+  }
+
+  const room = createRoom();
+  send(ws, { type: 'roomCreated', roomId: room.id, roomUrl: getRoomUrl(room.id) });
+  joinPlayer(ws, { ...message, name, roomId: room.id });
 }
 
 function handleMessage(ws, rawMessage) {
@@ -645,8 +821,9 @@ function handleMessage(ws, rawMessage) {
     return;
   }
 
-  const player = getPlayerBySocket(ws);
+  if (message.type === 'createRoom') return createRoomAndJoin(ws, message);
   if (message.type === 'join') return joinPlayer(ws, message);
+  const player = getPlayerBySocket(ws);
   if (!player) return;
 
   if (message.type === 'start') return startGame(player);
@@ -658,21 +835,29 @@ function handleMessage(ws, rawMessage) {
 
 function tick() {
   const now = Date.now();
-  if (game.phase === 'round') {
-    if (game.mode === 'relay' && game.relay && now >= game.relay.deadline) finishRelayDuel();
-    if (game.phase === 'round' && now >= game.roundEndsAt) finishRound();
-  } else if (game.phase === 'intermission' && now >= game.intermissionUntil) {
-    beginRound(game.roundIndex + 1);
+  for (const room of rooms.values()) {
+    const game = room.game;
+    if (game.phase === 'round') {
+      if (now >= game.roundEndsAt) finishRound(room);
+      else if (game.mode === 'relay' && game.relay && now >= game.relay.deadline) finishRelayDuel(room);
+    } else if (game.phase === 'intermission' && now >= game.intermissionUntil) {
+      beginRound(room, game.roundIndex + 1);
+    } else if (game.phase === 'wheel' && now >= game.wheelEndsAt) {
+      beginRound(room, MODES.length);
+    }
   }
 
-  if (now - lastBroadcastAt >= 500) broadcast();
+  if (now - lastBroadcastAt >= 500) {
+    for (const room of rooms.values()) broadcast(room);
+  }
 }
 
 async function serveStatic(req, res) {
   const pathname = decodeURIComponent((req.url || '/').split('?')[0]);
   if (pathname === '/health') {
+    const playerCount = [...rooms.values()].reduce((total, room) => total + room.players.size, 0);
     res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-    res.end(JSON.stringify({ ok: true, players: players.size, phase: game.phase }));
+    res.end(JSON.stringify({ ok: true, players: playerCount, rooms: rooms.size }));
     return;
   }
 
@@ -714,14 +899,17 @@ const websocketServer = new WebSocketServer({ server: httpServer, path: '/ws' })
 websocketServer.on('connection', (ws) => {
   ws.on('message', (message) => handleMessage(ws, message));
   ws.on('close', () => {
+    const room = getRoomBySocket(ws);
     const player = getPlayerBySocket(ws);
     if (!player) return;
-    players.delete(player.id);
-    if (game.phase === 'lobby' && player.isHost) {
-      const nextHost = players.values().next().value;
+    room.players.delete(player.id);
+    socketRooms.delete(ws);
+    if (room.game.phase === 'lobby' && player.isHost) {
+      const nextHost = room.players.values().next().value;
       if (nextHost) nextHost.isHost = true;
     }
-    broadcast();
+    if (room.players.size === 0) rooms.delete(room.id);
+    else broadcast(room);
   });
 });
 
