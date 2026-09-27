@@ -310,6 +310,66 @@ function tugRects(image, sheet, row) {
   };
 }
 
+// Each pull pose has its own short rope drawn in front of its hands. Next to the
+// shared scene rope those tails read as extra rope pieces, so erase the tail
+// from the right edge back to where the fist makes the run noticeably thicker.
+const ropelessCache = new WeakMap();
+
+function trimRopeTail(canvas, ropeY) {
+  const cached = ropelessCache.get(canvas);
+  if (cached) return cached;
+  const { width, height } = canvas;
+  const trimmed = document.createElement('canvas');
+  trimmed.width = width;
+  trimmed.height = height;
+  const context = trimmed.getContext('2d', { willReadFrequently: true });
+  context.drawImage(canvas, 0, 0);
+  const imageData = context.getImageData(0, 0, width, height);
+  const pixels = imageData.data;
+  const opaque = (x, y) => y >= 0 && y < height && pixels[(y * width + x) * 4 + 3] > 12;
+  const center = Math.round(ropeY);
+  const runAt = (x) => {
+    let start = -1;
+    for (let offset = 0; offset <= 6 && start < 0; offset += 1) {
+      if (opaque(x, center + offset)) start = center + offset;
+      else if (opaque(x, center - offset)) start = center - offset;
+    }
+    if (start < 0) return null;
+    let top = start;
+    let bottom = start;
+    while (opaque(x, top - 1)) top -= 1;
+    while (opaque(x, bottom + 1)) bottom += 1;
+    return [top, bottom];
+  };
+
+  let x = width - 1;
+  while (x > 0 && !runAt(x)) x -= 1;
+  let ropeThickness = 0;
+  for (let probe = x; probe > x - 6 && probe >= 0; probe -= 1) {
+    const run = runAt(probe);
+    if (run) ropeThickness = Math.max(ropeThickness, run[1] - run[0] + 1);
+  }
+  const limit = Math.round(width * 0.55);
+  for (; x >= limit; x -= 1) {
+    const run = runAt(x);
+    if (!run || run[1] - run[0] + 1 > ropeThickness * 1.6 + 2) break;
+    for (let y = run[0] - 1; y <= run[1] + 1; y += 1) {
+      if (y >= 0 && y < height) pixels[(y * width + x) * 4 + 3] = 0;
+    }
+  }
+  context.putImageData(imageData, 0, 0);
+  ropelessCache.set(canvas, trimmed);
+  return trimmed;
+}
+
+function addCanvasSprite(parent, canvas, pixelUnit, scale, position, z, flipX = false) {
+  const cutout = flipX ? mirrored(canvas) : canvas;
+  const sprite = makeSprite(canvasTexture(cutout), cutout.width * pixelUnit, cutout.height * pixelUnit, scale, z);
+  sprite.position.set(...position);
+  parent?.add(sprite);
+  return sprite;
+}
+
 function addIsolatedSprite(parent, image, search, core, pixelUnit, scale, position, z, flipX = false) {
   const isolated = isolateCutout(image, search, core);
   const cutout = flipX ? mirrored(isolated) : isolated;
@@ -450,16 +510,18 @@ function createCharacters(scene, images, data, pixelUnit, layout) {
     players.forEach((player, index) => {
       const row = CHARACTER_ROWS[player.characterId] ?? 0;
       const { search, core } = tugRects(image, TUG_SHEETS[team], row);
-      const cutout = isolateCutout(image, search, core);
+      const isolated = isolateCutout(image, search, core);
+      const ropeY = ropeTipY(isolated);
+      const cutout = trimRopeTail(isolated, ropeY);
       const baseX = side * layout.slots[team][index];
-      // A crowded team alternates sides of the rope like a real tug line: the
-      // near side sits lower and in front of the rope, the far side higher and
-      // behind it, which doubles the spacing between faces in each lane.
+      // A crowded team staggers into a near and a far lane so faces peek out
+      // between neighbours. The one shared rope is drawn over every puller, and
+      // the height offset stays inside its thickness so all hands stay on it.
       const lane = players.length >= CROWDED_TEAM_SIZE ? (index % 2 === 0 ? 1 : -1) : 0;
-      const laneOffsetY = -lane * 0.12 * cutout.height * unit;
-      const z = lane > 0 ? ROPE_Z + 0.04 : 1.12;
-      const baseY = layout.gripY - (cutout.height / 2 - ropeTipY(cutout)) * unit + laneOffsetY;
-      const tug = addIsolatedSprite(scene, image, search, core, pixelUnit, layout.characterScale, [baseX, baseY, z], z, team === 'white');
+      const laneOffsetY = -lane * Math.min(0.06 * cutout.height * unit, layout.ropeThickness * 0.35);
+      const z = 1.12 + lane * 0.02;
+      const baseY = layout.gripY - (cutout.height / 2 - ropeY) * unit + laneOffsetY;
+      const tug = addCanvasSprite(scene, cutout, pixelUnit, layout.characterScale, [baseX, baseY, z], z, team === 'white');
       tug.name = `${team}-${player.characterId}-tug`;
       const head = headAnchor(cutout);
       const headOffsetX = (head.x - cutout.width / 2) * unit * (team === 'white' ? -1 : 1);

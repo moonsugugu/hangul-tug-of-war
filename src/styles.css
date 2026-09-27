@@ -322,6 +322,7 @@ main { width: min(1180px, calc(100% - 36px)); margin: 0 auto 60px; }
 .mine-tag { margin-left: auto; padding: 3px 8px; border-radius: 99px; color: white; background: var(--blue-dark); font-size: 10px; }
 .score-card--white .mine-tag { color: var(--ink); background: var(--yellow); }
 .player-chip.is-self { outline: 2px solid var(--blue); }
+.team-lobby-card--white .player-chip.is-self { outline-color: #d9a441; }
 .lobby-roster { min-height: 0; background: var(--paper); border-color: var(--line); }
 .lobby-roster .team-badge { color: white; background: var(--pink); }
 

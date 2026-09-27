@@ -21,6 +21,7 @@ const state = {
 
 let socket;
 let lastViewKey = '';
+let lastPromptKey = '';
 let tugScene = null;
 const NAME_FLASH_MS = 1_200;
 // Shared with every mounted scene so a flash survives the scene being rebuilt.
@@ -121,22 +122,30 @@ function connect() {
       state.joined = Boolean(message.self);
       trackScoreFlashes(message.players);
       updateDynamic();
+      // The page (and its 3D arena) is rebuilt only when the page itself changes;
+      // a new question only swaps the prompt card so the arena never blanks out.
       const viewKey = [
         message.phase,
         message.mode?.id,
         message.roundIndex,
-        message.prompt?.id,
-        message.relay?.blueId,
-        message.relay?.whiteId,
-        message.relay?.lastResult?.winner,
         message.counts?.blue,
         message.counts?.white,
         message.self?.team,
         message.players?.map((player) => `${player.id}:${player.connected}:${player.characterId}:${player.team}`).join(','),
       ].join('|');
+      const promptKey = [
+        message.prompt?.id,
+        message.relay?.blueId,
+        message.relay?.whiteId,
+        message.relay?.lastResult?.winner,
+      ].join('|');
       if (viewKey !== lastViewKey) {
         lastViewKey = viewKey;
+        lastPromptKey = promptKey;
         render();
+      } else if (promptKey !== lastPromptKey) {
+        lastPromptKey = promptKey;
+        renderPromptOnly();
       }
       return;
     }
@@ -458,19 +467,36 @@ function renderLobby() {
 }
 
 function renderPlacement(data) {
-  const prompt = data.prompt;
   const seconds = Math.round(Number(data.placementDurationMs || 30_000) / 1000);
   return `
     <section class="game-page placement-page">
       <div class="game-heading"><div><div class="section-kicker">TEAM PLACEMENT · 팀 나누기 전</div><h1>타자 실력 재기</h1><p>${seconds}초 동안 문장을 정확하게 입력하세요. 실력이 비슷하도록 팀을 나눠 드려요.</p></div><div class="placement-timer" role="timer"><small>남은 시간</small><strong id="placement-time">${getTimeLabel(data.placementRemainingMs)}</strong></div></div>
-      <section class="prompt-card prompt-card--placement">
-        <div class="prompt-meta"><span class="round-badge">PRACTICE</span><span class="prompt-help">문장을 그대로 입력하면 다음 문장으로 넘어가요</span></div>
-        <div class="relay-sentence placement-sentence">${escapeHtml(prompt?.sentence || '문장을 준비하고 있어요…')}</div>
-        <form id="answer-form" class="answer-form"><input id="answer-input" class="answer-input" autocomplete="off" spellcheck="false" placeholder="여기에 문장을 입력하세요" /><button class="submit-button">입력 <span>↵</span></button></form>
-        <p class="prompt-note">맞게 친 글자만 세어요 · 지금까지 <b id="placement-keystrokes">${formatScore(data.self?.placementKeystrokes)}</b>타</p>
-      </section>
+      <div id="prompt-root">${renderPlacementCard(data)}</div>
     </section>
   `;
+}
+
+function renderPlacementCard(data) {
+  return `
+    <section class="prompt-card prompt-card--placement">
+      <div class="prompt-meta"><span class="round-badge">PRACTICE</span><span class="prompt-help">문장을 그대로 입력하면 다음 문장으로 넘어가요</span></div>
+      <div class="relay-sentence placement-sentence">${escapeHtml(data.prompt?.sentence || '문장을 준비하고 있어요…')}</div>
+      <form id="answer-form" class="answer-form"><input id="answer-input" class="answer-input" autocomplete="off" spellcheck="false" placeholder="여기에 문장을 입력하세요" /><button class="submit-button">입력 <span>↵</span></button></form>
+      <p class="prompt-note">맞게 친 글자만 세어요 · 지금까지 <b id="placement-keystrokes">${formatScore(data.self?.placementKeystrokes)}</b>타</p>
+    </section>
+  `;
+}
+
+function renderPromptOnly() {
+  const root = document.querySelector('#prompt-root');
+  const data = state.data;
+  if (!root || !data) {
+    render();
+    return;
+  }
+  root.innerHTML = data.phase === 'placement' ? renderPlacementCard(data) : renderPrompt(data);
+  bindPromptEvents(root);
+  updateDynamic();
 }
 
 function renderTeamReveal(data) {
@@ -651,7 +677,7 @@ function renderGame() {
       <div class="game-heading"><div><div class="section-kicker">HANGUL DAY MATCH · ${data.roundNumber === 5 ? '결승 5라운드' : `${Math.max(1, data.roundNumber)}라운드`}</div><h1>${escapeHtml(data.mode?.name || '말모이 줄다리기')}</h1><p>${escapeHtml(data.mode?.description || '한글의 힘으로 줄을 당겨요.')}</p></div>${data.self ? `<div class="my-team-chip my-team-chip--${data.self.team}"><span>${data.self.team === 'blue' ? '청' : '백'}</span><div><small>${escapeHtml(data.self.name)}</small><strong>나는 ${teamName(data.self.team)}</strong></div></div>` : '<div class="live-pill"><i></i> LIVE SERVER</div>'}</div>
       ${renderScoreboard(data)}
       ${renderArena(data)}
-      ${renderPrompt(data)}
+      <div id="prompt-root">${renderPrompt(data)}</div>
       <div class="round-strip">${roundModes.map((mode, index) => `<span class="round-chip ${index === data.roundIndex ? 'is-active' : index < data.roundIndex ? 'is-done' : ''}"><b>${index + 1}</b>${modeLabels[mode.id]}${data.roundScores?.[index] ? ` · ${teamName(data.roundScores[index].winner)} 승` : ''}</span>`).join('')}${data.totalRounds === 5 ? `<span class="round-chip ${data.roundIndex === 4 ? 'is-active' : ''}"><b>5</b>돌림판 결승</span>` : ''}</div>
     </section>
   `;
@@ -705,29 +731,33 @@ function bindEvents() {
     state.nickname = event.target.value;
   });
   document.querySelector('#start-button')?.addEventListener('click', startGame);
-  document.querySelector('#restart-button')?.addEventListener('click', restartGame);
-  document.querySelector('#answer-form')?.addEventListener('submit', (event) => {
-    event.preventDefault();
-    if (state.data?.prompt?.kind === 'relay') submitRelay();
-    else submitAnswer();
-  });
-  document.querySelectorAll('[data-choice]').forEach((button) => {
-    button.addEventListener('click', () => submitChoice(button.dataset.choice));
-  });
   document.querySelectorAll('[data-character]').forEach((button) => {
     button.addEventListener('click', () => {
       state.selectedCharacter = button.dataset.character;
       render();
     });
   });
-  document.querySelector('#answer-input')?.addEventListener('input', (event) => {
+  bindPromptEvents(document);
+}
+
+function bindPromptEvents(root) {
+  root.querySelector('#restart-button')?.addEventListener('click', restartGame);
+  root.querySelector('#answer-form')?.addEventListener('submit', (event) => {
+    event.preventDefault();
+    if (state.data?.prompt?.kind === 'relay') submitRelay();
+    else submitAnswer();
+  });
+  root.querySelectorAll('[data-choice]').forEach((button) => {
+    button.addEventListener('click', () => submitChoice(button.dataset.choice));
+  });
+  root.querySelector('#answer-input')?.addEventListener('input', (event) => {
     state.draft = event.target.value;
     // During the typing test, a perfectly typed sentence advances on its own
     // so children who forget Enter are not undercounted.
     const prompt = state.data?.prompt;
     if (prompt?.kind === 'placement' && !event.isComposing && event.target.value.trim() === prompt.sentence) submitAnswer();
   });
-  document.querySelector('#answer-input')?.focus();
+  root.querySelector('#answer-input')?.focus();
 }
 
 function updateDynamic() {
