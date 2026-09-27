@@ -43,7 +43,7 @@ function watch(socket) {
 test('라운드별 승리, 10초 연장, 2:2 돌림판 결승', async (t) => {
   const server = spawn(process.execPath, ['server/index.js'], {
     cwd: new URL('..', import.meta.url),
-    env: { ...process.env, PORT: String(PORT), ROUND_DURATION_MS: '900', OVERTIME_MS: '600', INTERMISSION_MS: '200', WHEEL_DURATION_MS: '700' },
+    env: { ...process.env, PORT: String(PORT), ROUND_DURATION_MS: '900', OVERTIME_MS: '600', INTERMISSION_MS: '200', WHEEL_DURATION_MS: '700', PLACEMENT_MS: '1200', TEAM_REVEAL_MS: '200' },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   t.after(() => server.kill());
@@ -64,11 +64,16 @@ test('라운드별 승리, 10초 연장, 2:2 돌림판 결승', async (t) => {
   await white.waitFor((state) => state.phase === 'lobby' && state.self?.team === 'white');
   blue.send({ type: 'start' });
 
+  const placement = await blue.waitFor((state) => state.phase === 'placement');
+  assert.equal(placement.prompt.kind, 'placement');
+  const reveal = await white.waitFor((state) => state.phase === 'teamReveal');
+  assert.equal(reveal.self.team, 'white', '아무도 치지 않으면 입장 순서대로 번갈아 배정돼요');
+  assert.equal(reveal.self.typingSpeed, 0);
   const first = await blue.waitFor((state) => state.phase === 'round' && state.roundIndex === 0);
   assert.equal(first.mode.duration, 900);
   const overtime = await blue.waitFor((state) => state.phase === 'round' && state.overtimeCount === 1);
   assert.equal(overtime.roundWins.blue, 0);
-  blue.send({ type: 'answer', answer: '윤슬' });
+  blue.send({ type: 'answer', answer: overtime.prompt.word });
   const firstEnd = await blue.waitFor((state) => state.phase === 'intermission' && state.roundIndex === 0);
   assert.deepEqual(firstEnd.roundWins, { blue: 1, white: 0 });
   assert.equal(firstEnd.roundScores[0].overtimeCount, 1);
@@ -93,7 +98,7 @@ test('라운드별 승리, 10초 연장, 2:2 돌림판 결승', async (t) => {
 
   const final = await blue.waitFor((state) => state.phase === 'round' && state.roundIndex === 4 && state.prompt);
   assert.equal(final.mode.id, ['word', 'quiz', 'repair', 'relay'][wheel.wheelSelectedIndex]);
-  if (final.prompt.kind === 'word') blue.send({ type: 'answer', answer: '윤슬' });
+  if (final.prompt.kind === 'word') blue.send({ type: 'answer', answer: final.prompt.word });
   if (final.prompt.kind === 'quiz') blue.send({ type: 'choice', choice: final.prompt.choices[0] });
   if (final.prompt.kind === 'repair') blue.send({ type: 'answer', answer: '한글날을 맞아 우리말을 사랑해요' });
   if (final.prompt.kind === 'relay') {
@@ -116,16 +121,42 @@ test('라운드별 승리, 10초 연장, 2:2 돌림판 결승', async (t) => {
   quickWhite.send({ type: 'join', roomId: quickLobby.roomId, name: '빠른 백', characterId: 'cat' });
   await quickWhite.waitFor((state) => state.phase === 'lobby' && state.self?.team === 'white');
   quickBlue.send({ type: 'start' });
-  const words = ['윤슬', '여우비', '너울', '모꼬지', '미리내', '도란도란', '가람', '아람', '마루', '나래', '누리'];
+  const typedWords = [];
   let quickState = await quickBlue.waitFor((state) => state.phase === 'round' && state.roundIndex === 0);
-  for (let index = 0; index < words.length && quickState.phase === 'round'; index += 1) {
-    assert.equal(quickState.prompt.id, `word-${index}`);
-    quickBlue.send({ type: 'answer', answer: words[index] });
-    quickState = await quickBlue.waitFor((state) => state.phase !== 'round' || state.prompt?.id === `word-${index + 1}`);
+  for (let count = 0; count < 20 && quickState.phase === 'round'; count += 1) {
+    const { id, word } = quickState.prompt;
+    typedWords.push(word);
+    quickBlue.send({ type: 'answer', answer: word });
+    quickState = await quickBlue.waitFor((state) => state.phase !== 'round' || state.prompt?.id !== id);
   }
+  assert.equal(new Set(typedWords).size, typedWords.length, '한 바퀴 안에서는 같은 낱말이 다시 나오지 않아야 해요');
   assert.equal(quickState.phase, 'intermission');
   assert.equal(quickState.roundScores[0].reason, 'rope');
   assert.deepEqual(quickState.roundWins, { blue: 1, white: 0 });
+  assert.ok(quickState.players.find((player) => player.id === quickState.self.id).scoreCount >= 1, '점수를 얻으면 이름표 반짝임 카운터가 올라가요');
+
+  // The two players who actually type must be split across teams.
+  const placementSockets = await Promise.all(Array.from({ length: 4 }, () => connect()));
+  t.after(() => placementSockets.forEach((socket) => socket.close()));
+  const [fastA, fastB, idleC, idleD] = placementSockets.map(watch);
+  fastA.send({ type: 'createRoom', name: '빠른가', characterId: 'bear' });
+  const placementLobby = await fastA.waitFor((state) => state.phase === 'lobby' && state.self);
+  for (const [index, player] of [fastB, idleC, idleD].entries()) {
+    player.send({ type: 'join', roomId: placementLobby.roomId, name: `참가${index}`, characterId: 'cat' });
+    await player.waitFor((state) => state.phase === 'lobby' && state.self);
+  }
+  fastA.send({ type: 'start' });
+  for (const typist of [fastA, fastB]) {
+    const typing = await typist.waitFor((state) => state.phase === 'placement' && state.prompt?.kind === 'placement');
+    typist.send({ type: 'answer', answer: typing.prompt.sentence });
+    await typist.waitFor((state) => state.self.placementKeystrokes > 0);
+  }
+  const revealA = await fastA.waitFor((state) => state.phase === 'teamReveal');
+  const revealB = await fastB.waitFor((state) => state.phase === 'teamReveal');
+  assert.ok(revealA.self.typingSpeed > 0);
+  assert.notEqual(revealA.self.team, revealB.self.team);
+  assert.deepEqual(revealA.counts, { blue: 2, white: 2 });
+  assert.equal(revealA.players.some((player) => 'typingSpeed' in player), false, '다른 사람의 타자 속도는 공개하지 않아요');
 
   const crowdSockets = await Promise.all(Array.from({ length: 31 }, () => connect()));
   t.after(() => crowdSockets.forEach((socket) => socket.close()));

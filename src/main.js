@@ -21,8 +21,20 @@ const state = {
 
 let socket;
 let lastViewKey = '';
-let lastPromptKey = '';
 let tugScene = null;
+const NAME_FLASH_MS = 1_200;
+// Shared with every mounted scene so a flash survives the scene being rebuilt.
+const nameFlashUntil = new Map();
+const lastScoreCounts = new Map();
+
+function trackScoreFlashes(players = []) {
+  const now = Date.now();
+  for (const player of players) {
+    const previous = lastScoreCounts.get(player.id);
+    if (previous !== undefined && player.scoreCount > previous) nameFlashUntil.set(player.id, now + NAME_FLASH_MS);
+    lastScoreCounts.set(player.id, player.scoreCount);
+  }
+}
 
 const characterOptions = [
   { id: 'rabbit', name: '토끼', emoji: '🐰', description: '빠른 손' },
@@ -107,6 +119,7 @@ function connect() {
       state.roomUrl = message.roomUrl || state.roomUrl;
       state.data = message;
       state.joined = Boolean(message.self);
+      trackScoreFlashes(message.players);
       updateDynamic();
       const viewKey = [
         message.phase,
@@ -118,7 +131,8 @@ function connect() {
         message.relay?.lastResult?.winner,
         message.counts?.blue,
         message.counts?.white,
-        message.players?.map((player) => `${player.id}:${player.connected}:${player.characterId}`).join(','),
+        message.self?.team,
+        message.players?.map((player) => `${player.id}:${player.connected}:${player.characterId}:${player.team}`).join(','),
       ].join('|');
       if (viewKey !== lastViewKey) {
         lastViewKey = viewKey;
@@ -128,6 +142,17 @@ function connect() {
     }
     if (message.type === 'answerResult' || message.type === 'choiceResult') {
       state.result = message;
+      state.draft = '';
+      renderResultToast();
+      return;
+    }
+    if (message.type === 'placementResult') {
+      state.result = {
+        correct: message.correct,
+        score: message.keystrokes,
+        unit: '타',
+        title: message.correct ? '정확해요!' : '틀린 글자는 빼고 셌어요',
+      };
       state.draft = '';
       renderResultToast();
       return;
@@ -245,7 +270,7 @@ function restartGame() {
 
 function submitAnswer() {
   const prompt = state.data?.prompt;
-  if (!prompt || !['word', 'repair'].includes(prompt.kind)) return;
+  if (!prompt || !['word', 'repair', 'placement'].includes(prompt.kind)) return;
   const answer = document.querySelector('#answer-input')?.value ?? state.draft;
   if (!answer.trim()) return;
   send({ type: 'answer', answer });
@@ -388,7 +413,7 @@ function renderLobby() {
         <div class="join-card panel-card">
           <div class="section-kicker">${state.roomId ? '방 입장' : '방 만들기'}</div>
           <h2>${state.roomId ? '초대받은 방에 들어가요' : '방을 만들고 친구를 불러요'}</h2>
-          <p class="muted">게임 안에서 사용할 닉네임을 입력하면 팀이 자동으로 배정돼요. 한 방에 최대 30명까지 함께할 수 있어요.</p>
+          <p class="muted">게임 안에서 사용할 닉네임을 입력해 주세요. 게임을 시작하면 타자 실력을 재서 비슷한 실력으로 팀을 나눠요. 한 방에 최대 30명까지 함께할 수 있어요.</p>
           <label class="field-label" for="nickname">닉네임</label>
           <input id="nickname" class="text-input" maxlength="18" autocomplete="nickname" placeholder="예: 한별" value="${escapeHtml(state.nickname)}" />
           <div class="field-label character-field-label">내 캐릭터 <span>하나를 골라 주세요</span></div>
@@ -402,8 +427,7 @@ function renderLobby() {
     `;
   }
 
-  const bluePlayers = data?.players?.filter((player) => player.team === 'blue') || [];
-  const whitePlayers = data?.players?.filter((player) => player.team === 'white') || [];
+  const players = data?.players || [];
   const isHost = data?.self?.isHost;
 
   return `
@@ -412,46 +436,84 @@ function renderLobby() {
         <div>
           <div class="section-kicker">WAITING ROOM</div>
           <h1>모두 모이면 시작해요</h1>
-          <p class="muted">현재 ${data?.players?.length || 0}/${data?.maxPlayers || 30}명 · 라운드마다 승부를 정하고, 동점이면 10초씩 연장합니다.</p>
+          <p class="muted">현재 ${players.length}/${data?.maxPlayers || 30}명 · 시작하면 먼저 타자 실력을 재고, 실력이 비슷하도록 청팀과 백팀을 나눠요.</p>
         </div>
         ${isHost ? '<button id="start-button" class="primary-button compact">게임 시작 <span>→</span></button>' : '<span class="waiting-pill"><i></i> 진행자를 기다리는 중</span>'}
       </div>
       ${renderRoomShare()}
-      <div class="team-grid lobby-teams">
-        ${renderTeamLobby('blue', bluePlayers, data?.counts?.blue || bluePlayers.length)}
-        ${renderTeamLobby('white', whitePlayers, data?.counts?.white || whitePlayers.length)}
-      </div>
+      <article class="team-lobby-card lobby-roster">
+        <div class="team-card-top"><span class="team-badge">모</span><span>참가자</span><strong>${players.length}명</strong></div>
+        <div class="player-chips">${players.map((player) => {
+          const character = getCharacter(player.characterId);
+          const isSelf = player.id === data?.self?.id;
+          return `<span class="player-chip ${isSelf ? 'is-self' : ''}"><span aria-hidden="true">${character.emoji}</span>${escapeHtml(player.name)}${isSelf ? '<small>나</small>' : ''}${player.isHost ? '<small>진행</small>' : ''}</span>`;
+        }).join('') || '<span class="muted">참가자를 기다리는 중</span>'}</div>
+      </article>
       <div class="how-to panel-card">
         <div><span class="how-icon">✦</span><strong>게임 규칙</strong></div>
-        <p>청팀과 백팀의 점수는 서버에서 계산되고, 인원이 적은 팀에는 <b>인원수 비율만큼 보정 점수</b>가 적용돼요.</p>
+        <p>시작하면 <b>30초 동안 문장을 입력해 타자 실력을 재요.</b> 실력에 맞춰 팀을 나눈 뒤 1라운드를 시작하고, 인원이 적은 팀에는 인원수 비율만큼 보정 점수가 적용돼요.</p>
       </div>
     </section>
   `;
 }
 
-function renderTeamLobby(team, teamPlayers, count) {
+function renderPlacement(data) {
+  const prompt = data.prompt;
+  const seconds = Math.round(Number(data.placementDurationMs || 30_000) / 1000);
   return `
-    <article class="team-lobby-card team-lobby-card--${team}">
-      <div class="team-card-top"><span class="team-badge">${team === 'blue' ? '청' : '백'}</span><span>${teamName(team)}</span><strong>${count}명</strong></div>
-      <div class="player-chips">${teamPlayers.map((player) => {
-        const character = getCharacter(player.characterId);
-        return `<span class="player-chip"><span aria-hidden="true">${character.emoji}</span>${escapeHtml(player.name)}${player.isHost ? '<small>진행</small>' : ''}</span>`;
-      }).join('') || '<span class="muted">참가자를 기다리는 중</span>'}</div>
-    </article>
+    <section class="game-page placement-page">
+      <div class="game-heading"><div><div class="section-kicker">TEAM PLACEMENT · 팀 나누기 전</div><h1>타자 실력 재기</h1><p>${seconds}초 동안 문장을 정확하게 입력하세요. 실력이 비슷하도록 팀을 나눠 드려요.</p></div><div class="placement-timer" role="timer"><small>남은 시간</small><strong id="placement-time">${getTimeLabel(data.placementRemainingMs)}</strong></div></div>
+      <section class="prompt-card prompt-card--placement">
+        <div class="prompt-meta"><span class="round-badge">PRACTICE</span><span class="prompt-help">문장을 그대로 입력하면 다음 문장으로 넘어가요</span></div>
+        <div class="relay-sentence placement-sentence">${escapeHtml(prompt?.sentence || '문장을 준비하고 있어요…')}</div>
+        <form id="answer-form" class="answer-form"><input id="answer-input" class="answer-input" autocomplete="off" spellcheck="false" placeholder="여기에 문장을 입력하세요" /><button class="submit-button">입력 <span>↵</span></button></form>
+        <p class="prompt-note">맞게 친 글자만 세어요 · 지금까지 <b id="placement-keystrokes">${formatScore(data.self?.placementKeystrokes)}</b>타</p>
+      </section>
+    </section>
+  `;
+}
+
+function renderTeamReveal(data) {
+  const self = data.self;
+  const myTeam = self?.team || 'blue';
+  const roster = (team) => (data.players || []).filter((player) => player.team === team).map((player) => {
+    const character = getCharacter(player.characterId);
+    return `<span class="player-chip ${player.id === self?.id ? 'is-self' : ''}"><span aria-hidden="true">${character.emoji}</span>${escapeHtml(player.name)}${player.id === self?.id ? '<small>나</small>' : ''}</span>`;
+  }).join('');
+  return `
+    <section class="game-page team-reveal-page">
+      <section class="team-reveal-card team-reveal-card--${myTeam}">
+        <div class="section-kicker">MY TEAM</div>
+        <div class="team-reveal-seal" aria-hidden="true">${myTeam === 'blue' ? '청' : '백'}</div>
+        <h1>${escapeHtml(self?.name || '')}님은 <em>${teamName(myTeam)}</em>이에요!</h1>
+        <p>내 타자 속도 <b>분당 ${formatScore(self?.typingSpeed)}타</b> · 실력이 비슷하도록 팀을 나눴어요.</p>
+        <div class="next-countdown">1라운드 시작까지 <span id="reveal-time">${getTimeLabel(data.teamRevealRemainingMs)}</span></div>
+      </section>
+      <div class="team-grid">
+        ${['blue', 'white'].map((team) => `
+          <article class="team-lobby-card team-lobby-card--${team} ${team === myTeam ? 'is-mine' : ''}">
+            <div class="team-card-top"><span class="team-badge">${team === 'blue' ? '청' : '백'}</span><span>${teamName(team)}${team === myTeam ? ' · 우리 팀' : ''}</span><strong>${data.counts?.[team] || 0}명</strong></div>
+            <div class="player-chips">${roster(team)}</div>
+          </article>
+        `).join('')}
+      </div>
+    </section>
   `;
 }
 
 function renderScoreboard(data) {
+  const mine = (team) => (data.self?.team === team ? ' is-mine' : '');
+  const mineTag = (team) => (data.self?.team === team ? '<span class="mine-tag">우리 팀</span>' : '');
   return `
     <div class="scoreboard">
-      <div class="score-card score-card--blue">
-        <div class="score-card__label"><span class="dot"></span> 청팀 <small id="blue-count">${data.counts.blue}명</small></div>
+      <div class="score-card score-card--blue${mine('blue')}">
+        <div class="score-card__label"><span class="dot"></span> 청팀 <small id="blue-count">${data.counts.blue}명</small>${mineTag('blue')}</div>
         <strong id="blue-score">${formatScore(data.scores.blue)}</strong>
         <small class="multiplier" id="blue-multiplier">인원 보정 ×${data.multipliers.blue.toFixed(2)}</small><span class="round-wins" id="blue-wins">라운드 ${data.roundWins?.blue || 0}승</span>
       </div>
       <div class="score-vs">VS</div>
-      <div class="score-card score-card--white">
-        <div class="score-card__label"><span class="dot"></span> 백팀 <small id="white-count">${data.counts.white}명</small></div>
+      <div class="score-card score-card--white${mine('white')}">
+        <div class="score-card__label"><span class="dot"></span> 백팀 <small id="white-count">${data.counts.white}명</small>${mineTag('white')}</div>
         <strong id="white-score">${formatScore(data.scores.white)}</strong>
         <small class="multiplier" id="white-multiplier">인원 보정 ×${data.multipliers.white.toFixed(2)}</small><span class="round-wins" id="white-wins">라운드 ${data.roundWins?.white || 0}승</span>
       </div>
@@ -586,7 +648,7 @@ function renderGame() {
   const data = state.data;
   return `
     <section class="game-page">
-      <div class="game-heading"><div><div class="section-kicker">HANGUL DAY MATCH · ${data.roundNumber === 5 ? '결승 5라운드' : `${Math.max(1, data.roundNumber)}라운드`}</div><h1>${escapeHtml(data.mode?.name || '말모이 줄다리기')}</h1><p>${escapeHtml(data.mode?.description || '한글의 힘으로 줄을 당겨요.')}</p></div><div class="live-pill"><i></i> LIVE SERVER</div></div>
+      <div class="game-heading"><div><div class="section-kicker">HANGUL DAY MATCH · ${data.roundNumber === 5 ? '결승 5라운드' : `${Math.max(1, data.roundNumber)}라운드`}</div><h1>${escapeHtml(data.mode?.name || '말모이 줄다리기')}</h1><p>${escapeHtml(data.mode?.description || '한글의 힘으로 줄을 당겨요.')}</p></div>${data.self ? `<div class="my-team-chip my-team-chip--${data.self.team}"><span>${data.self.team === 'blue' ? '청' : '백'}</span><div><small>${escapeHtml(data.self.name)}</small><strong>나는 ${teamName(data.self.team)}</strong></div></div>` : '<div class="live-pill"><i></i> LIVE SERVER</div>'}</div>
       ${renderScoreboard(data)}
       ${renderArena(data)}
       ${renderPrompt(data)}
@@ -597,12 +659,17 @@ function renderGame() {
 
 function render() {
   const data = state.data;
-  const isGame = Boolean(data?.phase && state.joined && data.phase !== 'lobby');
+  const inRoomPhase = Boolean(data?.phase && state.joined && data.phase !== 'lobby');
+  const isGame = inRoomPhase && !['placement', 'teamReveal'].includes(data.phase);
   if (tugScene) {
     tugScene.dispose();
     tugScene = null;
   }
-  app.innerHTML = `${renderHeader()}<main>${isGame ? renderGame() : renderLobby()}</main><div id="notice-root"></div><div id="toast-root"></div>`;
+  const page = !inRoomPhase ? renderLobby()
+    : data.phase === 'placement' ? renderPlacement(data)
+      : data.phase === 'teamReveal' ? renderTeamReveal(data)
+        : renderGame();
+  app.innerHTML = `${renderHeader()}<main>${page}</main><div id="notice-root"></div><div id="toast-root"></div>`;
   bindEvents();
   renderRoomQr();
   updateDynamic();
@@ -610,7 +677,7 @@ function render() {
     const sceneHost = document.querySelector('#three-arena');
     if (sceneHost) {
       try {
-        tugScene = mountTugScene(sceneHost, data);
+        tugScene = mountTugScene(sceneHost, data, { selfId: data.self?.id, flashUntil: nameFlashUntil });
       } catch (error) {
         sceneHost.innerHTML = '<div class="scene-fallback">3D 경기장을 준비하는 중이에요. 잠시 후 다시 시도해 주세요.</div>';
         console.error(error);
@@ -655,6 +722,10 @@ function bindEvents() {
   });
   document.querySelector('#answer-input')?.addEventListener('input', (event) => {
     state.draft = event.target.value;
+    // During the typing test, a perfectly typed sentence advances on its own
+    // so children who forget Enter are not undercounted.
+    const prompt = state.data?.prompt;
+    if (prompt?.kind === 'placement' && !event.isComposing && event.target.value.trim() === prompt.sentence) submitAnswer();
   });
   document.querySelector('#answer-input')?.focus();
 }
@@ -685,6 +756,12 @@ function updateDynamic() {
   if (whiteWins) whiteWins.textContent = `라운드 ${data.roundWins?.white || 0}승`;
   const wheelTime = document.querySelector('#wheel-time');
   if (wheelTime) wheelTime.textContent = getTimeLabel(data.wheelRemainingMs);
+  const placementTime = document.querySelector('#placement-time');
+  if (placementTime) placementTime.textContent = getTimeLabel(data.placementRemainingMs);
+  const placementKeystrokes = document.querySelector('#placement-keystrokes');
+  if (placementKeystrokes) placementKeystrokes.textContent = formatScore(data.self?.placementKeystrokes);
+  const revealTime = document.querySelector('#reveal-time');
+  if (revealTime) revealTime.textContent = getTimeLabel(data.teamRevealRemainingMs);
   if (positionLabel) positionLabel.textContent = getRopeStepLabel(data);
   const currentTick = 10 + getRopeStep(data);
   document.querySelectorAll('[data-rope-tick]').forEach((tick) => {
@@ -705,10 +782,10 @@ function renderResultToast() {
   const root = document.querySelector('#toast-root');
   if (!root || !state.result) return;
   const result = state.result;
-  const title = result.correct ? '정답이에요!' : '다음 문제에서 만회해요';
+  const title = result.title || (result.correct ? '정답이에요!' : '다음 문제에서 만회해요');
   const detailParts = [result.meaning, result.example ? `예문: ${result.example}` : '', result.explanation, result.answer ? `정답: ${result.answer}` : ''].filter(Boolean);
   const details = detailParts.length ? `<small>${detailParts.map((detail) => escapeHtml(detail)).join('<br />')}</small>` : '';
-  root.innerHTML = `<div class="result-toast ${result.correct ? 'is-correct' : 'is-wrong'}"><span class="toast-mark">${result.correct ? '✓' : '!'}</span><div><strong>${title}</strong>${details}</div><b>${Math.round(result.score || 0)}점</b></div>`;
+  root.innerHTML = `<div class="result-toast ${result.correct ? 'is-correct' : 'is-wrong'}"><span class="toast-mark">${result.correct ? '✓' : '!'}</span><div><strong>${title}</strong>${details}</div><b>${result.unit === '타' ? '+' : ''}${Math.round(result.score || 0)}${result.unit || '점'}</b></div>`;
   window.setTimeout(() => {
     if (root) root.innerHTML = '';
     state.result = null;

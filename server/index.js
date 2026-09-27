@@ -18,6 +18,8 @@ const ROUND_DURATION_MS = Number(process.env.ROUND_DURATION_MS || 180_000);
 const OVERTIME_MS = Number(process.env.OVERTIME_MS || 10_000);
 const INTERMISSION_MS = Number(process.env.INTERMISSION_MS || 4_000);
 const WHEEL_DURATION_MS = Number(process.env.WHEEL_DURATION_MS || 7_000);
+const PLACEMENT_MS = Number(process.env.PLACEMENT_MS || 30_000);
+const TEAM_REVEAL_MS = Number(process.env.TEAM_REVEAL_MS || 7_000);
 const ROPE_MAX_STEPS = 10;
 const ROPE_POINTS_PER_STEP = 75;
 const MAX_PLAYERS_PER_ROOM = 30;
@@ -64,9 +66,77 @@ const WORD_PROMPTS = [
   { word: '온새미로', meaning: '가르거나 쪼개지 않고 생긴 그대로', example: '자연을 온새미로 바라보며 글을 썼습니다.', category: '마음' },
   { word: '보듬다', meaning: '두 팔로 감싸 품다', example: '서로의 실수를 보듬는 마음이 필요합니다.', category: '마음' },
   { word: '새벽녘', meaning: '새벽 무렵', example: '새벽녘 하늘에 샛별이 빛났습니다.', category: '자연' },
+  { word: '노을', meaning: '해가 뜨거나 질 때 하늘이 붉게 물드는 현상', example: '서쪽 하늘이 노을로 붉게 물들었습니다.', category: '자연' },
+  { word: '이슬', meaning: '밤사이 풀잎 등에 맺힌 작은 물방울', example: '아침 풀잎마다 이슬이 맺혔습니다.', category: '자연' },
+  { word: '산들바람', meaning: '시원하고 가볍게 부는 바람', example: '산들바람에 나뭇잎이 흔들렸습니다.', category: '자연' },
+  { word: '하늬바람', meaning: '서쪽에서 부는 바람', example: '가을 하늬바람이 들판을 지나갔습니다.', category: '자연' },
+  { word: '마파람', meaning: '남쪽에서 부는 바람', example: '따뜻한 마파람이 불어왔습니다.', category: '자연' },
+  { word: '된서리', meaning: '늦가을에 아주 세게 내린 서리', example: '된서리가 내려 들판이 하얘졌습니다.', category: '자연' },
+  { word: '함박눈', meaning: '굵고 탐스럽게 내리는 눈', example: '운동장에 함박눈이 소복이 쌓였습니다.', category: '자연' },
+  { word: '보슬비', meaning: '바람 없이 가늘고 조용히 내리는 비', example: '보슬비가 창밖에 조용히 내렸습니다.', category: '자연' },
+  { word: '소나기', meaning: '갑자기 세차게 쏟아지다가 곧 그치는 비', example: '소나기가 지나가자 무지개가 떴습니다.', category: '자연' },
+  { word: '꽃샘추위', meaning: '이른 봄, 꽃이 필 무렵에 찾아오는 추위', example: '꽃샘추위에 두꺼운 옷을 다시 꺼냈습니다.', category: '자연' },
+  { word: '늦더위', meaning: '여름이 다 지나도 가시지 않는 더위', example: '구월인데도 늦더위가 이어졌습니다.', category: '자연' },
+  { word: '해돋이', meaning: '해가 막 솟아오르는 때나 그 모습', example: '새해 첫날 해돋이를 보러 갔습니다.', category: '자연' },
+  { word: '달무리', meaning: '달 둘레에 둥그렇게 생기는 허연 테', example: '보름달 둘레에 달무리가 졌습니다.', category: '자연' },
+  { word: '별똥별', meaning: '밤하늘에 빛을 내며 떨어지는 별', example: '별똥별을 보며 소원을 빌었습니다.', category: '자연' },
+  { word: '구름바다', meaning: '높은 곳에서 내려다본, 바다처럼 넓게 깔린 구름', example: '산꼭대기에서 구름바다를 내려다보았습니다.', category: '자연' },
+  { word: '볕뉘', meaning: '작은 틈으로 잠깐 비치는 햇볕', example: '창틈으로 볕뉘가 들어왔습니다.', category: '자연' },
+  { word: '꽃망울', meaning: '아직 피지 않은 어린 꽃봉오리', example: '개나리 가지에 꽃망울이 맺혔습니다.', category: '자연' },
+  { word: '우듬지', meaning: '나무의 꼭대기 줄기', example: '까치가 우듬지에 둥지를 틀었습니다.', category: '자연' },
+  { word: '떡잎', meaning: '씨앗에서 싹이 틀 때 처음 나오는 잎', example: '강낭콩에서 떡잎 두 장이 나왔습니다.', category: '자연' },
+  { word: '개울', meaning: '골짜기나 들에 흐르는 작은 물줄기', example: '개울물이 맑게 흘렀습니다.', category: '자연' },
+  { word: '오솔길', meaning: '폭이 좁고 호젓한 길', example: '숲속 오솔길을 따라 걸었습니다.', category: '자연' },
+  { word: '고샅', meaning: '시골 마을의 좁은 골목길', example: '아이들이 고샅을 뛰어다녔습니다.', category: '자연' },
+  { word: '들녘', meaning: '들이 펼쳐진 곳', example: '가을 들녘이 황금빛으로 물들었습니다.', category: '자연' },
+  { word: '뫼', meaning: '산', example: '높은 뫼 위로 흰 구름이 걸렸습니다.', category: '자연' },
+  { word: '잔물결', meaning: '자잘하게 이는 물결', example: '호수에 잔물결이 일었습니다.', category: '자연' },
+  { word: '한살이', meaning: '생물이 태어나서 죽을 때까지의 과정', example: '배추흰나비의 한살이를 관찰했습니다.', category: '자연' },
+  { word: '두레', meaning: '농사일을 함께하려고 마을 사람들이 만든 모임', example: '옛날에는 두레를 짜서 모내기를 했습니다.', category: '모임' },
+  { word: '품앗이', meaning: '힘든 일을 서로 거들어 주며 품을 주고받는 일', example: '이웃끼리 품앗이로 김장을 했습니다.', category: '모임' },
+  { word: '너나들이', meaning: '서로 너, 나 하고 부르며 터놓고 지내는 사이', example: '우리는 어릴 때부터 너나들이하는 사이입니다.', category: '모임' },
+  { word: '동무', meaning: '늘 친하게 어울리는 사람', example: '동무들과 함께 줄넘기를 했습니다.', category: '모임' },
+  { word: '어깨동무', meaning: '서로 팔을 어깨에 얹고 나란히 서는 일', example: '친구와 어깨동무를 하고 걸었습니다.', category: '모임' },
+  { word: '마중', meaning: '오는 사람을 나가서 맞이하는 일', example: '할머니를 마중하러 역에 갔습니다.', category: '모임' },
+  { word: '배웅', meaning: '떠나는 사람을 따라 나가 작별하여 보내는 일', example: '전학 가는 친구를 배웅했습니다.', category: '모임' },
+  { word: '한뉘', meaning: '한평생', example: '한뉘 동안 우리말을 아끼며 살고 싶어요.', category: '마음' },
+  { word: '설렘', meaning: '마음이 들떠서 두근거리는 느낌', example: '현장 체험 학습 전날 설렘에 잠이 오지 않았습니다.', category: '마음' },
+  { word: '슬기', meaning: '일을 바르게 판단하고 잘 처리하는 재능', example: '슬기를 모아 문제를 해결했습니다.', category: '마음' },
+  { word: '마음씨', meaning: '마음을 쓰는 태도', example: '친구를 돕는 고운 마음씨를 칭찬했습니다.', category: '마음' },
+  { word: '눈썰미', meaning: '한두 번 보고 곧 그대로 해내는 재주', example: '눈썰미가 좋아 종이접기를 금방 따라 했습니다.', category: '마음' },
+  { word: '너그럽다', meaning: '마음이 넓고 속이 깊다', example: '너그러운 마음으로 친구의 사과를 받아 주었습니다.', category: '마음' },
+  { word: '미쁘다', meaning: '믿음직하다', example: '약속을 잘 지키는 미쁜 친구입니다.', category: '마음' },
+  { word: '다부지다', meaning: '굳세고 야무지다', example: '다부진 목소리로 발표를 했습니다.', category: '마음' },
+  { word: '해맑다', meaning: '티 없이 맑고 깨끗하다', example: '동생이 해맑게 웃었습니다.', category: '모양' },
+  { word: '정갈하다', meaning: '깨끗하고 깔끔하다', example: '정갈하게 정리된 책상에서 공부했습니다.', category: '모양' },
+  { word: '옹골차다', meaning: '속이 꽉 차서 실속이 있다', example: '옹골차게 여문 밤을 주웠습니다.', category: '모양' },
+  { word: '맞춤하다', meaning: '넘치거나 모자라지 않고 꼭 알맞다', example: '신발이 발에 맞춤하게 꼭 맞았습니다.', category: '모양' },
+  { word: '알록달록', meaning: '여러 빛깔이 고르지 않게 뒤섞인 모양', example: '알록달록한 단풍잎을 모았습니다.', category: '모양' },
+  { word: '옹기종기', meaning: '작은 것들이 고르지 않게 많이 모여 있는 모양', example: '아이들이 옹기종기 모여 앉았습니다.', category: '모양' },
+  { word: '뭉게뭉게', meaning: '구름이나 연기가 둥글게 잇따라 피어오르는 모양', example: '하늘에 흰 구름이 뭉게뭉게 피었습니다.', category: '모양' },
+  { word: '새근새근', meaning: '어린아이가 곤히 잠들어 조용히 숨 쉬는 소리', example: '아기가 새근새근 잠들었습니다.', category: '말맛' },
+  { word: '소곤소곤', meaning: '작은 목소리로 가만가만 이야기하는 소리', example: '도서관에서 소곤소곤 이야기했습니다.', category: '말맛' },
+  { word: '졸졸', meaning: '가는 물줄기가 부드럽게 흐르는 소리', example: '시냇물이 졸졸 흘렀습니다.', category: '말맛' },
+  { word: '너스레', meaning: '수다스럽게 떠벌려 늘어놓는 말', example: '삼촌의 너스레에 모두 웃었습니다.', category: '말맛' },
+  { word: '익살', meaning: '남을 웃기려고 일부러 하는 말이나 몸짓', example: '익살스러운 표정으로 친구들을 웃겼습니다.', category: '말맛' },
+  { word: '사뿐사뿐', meaning: '소리가 나지 않을 만큼 가볍게 걷는 모양', example: '고양이가 사뿐사뿐 걸어왔습니다.', category: '움직임' },
+  { word: '성큼성큼', meaning: '다리를 크게 떼어 놓으며 걷는 모양', example: '형이 성큼성큼 앞서 걸었습니다.', category: '움직임' },
+  { word: '엉금엉금', meaning: '느릿느릿 걷거나 기는 모양', example: '거북이가 엉금엉금 기어갔습니다.', category: '움직임' },
+  { word: '방긋방긋', meaning: '입을 예쁘게 조금 벌리며 소리 없이 웃는 모양', example: '아기가 방긋방긋 웃었습니다.', category: '움직임' },
+  { word: '손사래', meaning: '거절하거나 아니라고 할 때 손을 펴서 휘젓는 일', example: '칭찬을 받자 손사래를 쳤습니다.', category: '움직임' },
+  { word: '곁눈질', meaning: '얼굴은 그대로 두고 눈만 돌려 옆을 보는 일', example: '시험 중에는 곁눈질을 하지 않아요.', category: '움직임' },
+  { word: '갈무리', meaning: '물건을 잘 정리하여 간수하거나 일을 마무리하는 일', example: '수업이 끝나고 학용품을 갈무리했습니다.', category: '움직임' },
+  { word: '싱그럽다', meaning: '싱싱하고 향기로운 느낌이 있다', example: '비 온 뒤 숲 냄새가 싱그러웠습니다.', category: '느낌' },
+  { word: '따사롭다', meaning: '따뜻한 기운이 있다', example: '따사로운 봄볕이 교실에 들었습니다.', category: '느낌' },
+  { word: '포근하다', meaning: '부드럽고 따뜻하다', example: '포근한 이불 속에서 잠이 들었습니다.', category: '느낌' },
+  { word: '고요', meaning: '조용하고 잠잠한 상태', example: '밤이 되자 마을에 고요가 찾아왔습니다.', category: '느낌' },
+  { word: '설빔', meaning: '설날에 입으려고 새로 마련한 옷이나 신발', example: '설빔으로 고운 한복을 입었습니다.', category: '문화' },
+  { word: '널뛰기', meaning: '긴 널빤지 양 끝에 서서 번갈아 뛰어오르는 놀이', example: '설날에 널뛰기를 했습니다.', category: '문화' },
+  { word: '달맞이', meaning: '정월 대보름에 산이나 들에 나가 달이 뜨기를 기다려 맞이하는 일', example: '대보름날 언덕에 올라 달맞이를 했습니다.', category: '문화' },
+  { word: '까치설', meaning: '설날의 전날', example: '까치설에 가족이 모여 만두를 빚었습니다.', category: '문화' },
 ];
 
-const WORD_QUIZ_PROMPTS = WORD_PROMPTS.slice(0, 24).map((prompt, index) => ({
+const WORD_QUIZ_PROMPTS = WORD_PROMPTS.map((prompt, index) => ({
   category: '순우리말',
   meaning: prompt.meaning,
   choices: [prompt.word, WORD_PROMPTS[(index + 7) % WORD_PROMPTS.length].word, WORD_PROMPTS[(index + 15) % WORD_PROMPTS.length].word],
@@ -87,7 +157,90 @@ const HANGUL_CREATION_QUIZ_PROMPTS = [
   { category: '한글 창제', meaning: '오늘 우리가 한글을 지키는 방법으로 알맞은 것은 무엇일까요?', choices: ['우리말을 아끼고 바르게 쓰기', '어려운 말만 골라 쓰기', '다른 사람의 말을 놀리기'], answer: '우리말을 아끼고 바르게 쓰기', explanation: '우리말을 존중하고 정확하게 쓰는 것이 한글 사랑의 시작입니다.' },
 ];
 
-const QUIZ_PROMPTS = [...WORD_QUIZ_PROMPTS, ...HANGUL_CREATION_QUIZ_PROMPTS];
+function shuffledIndexes(length, avoidFirst) {
+  const order = Array.from({ length }, (_, index) => index);
+  for (let index = length - 1; index > 0; index -= 1) {
+    const swap = Math.floor(Math.random() * (index + 1));
+    [order[index], order[swap]] = [order[swap], order[index]];
+  }
+  if (length > 1 && order[0] === avoidFirst) [order[0], order[1]] = [order[1], order[0]];
+  return order;
+}
+
+// Each player walks a private shuffled deck that is reshuffled every lap, so
+// rounds and players do not all see the same fixed sequence.
+function deckIndex(progress, key, length, position) {
+  progress.decks ??= {};
+  const lap = Math.floor(position / length);
+  let deck = progress.decks[key];
+  if (!deck || deck.lap !== lap) {
+    deck = { lap, order: shuffledIndexes(length, deck?.order[length - 1]) };
+    progress.decks[key] = deck;
+  }
+  return deck.order[position % length];
+}
+
+function currentWordPrompt(progress) {
+  const index = deckIndex(progress, 'word', WORD_PROMPTS.length, progress.promptIndex);
+  return { id: `word-${progress.promptIndex}-${index}`, prompt: WORD_PROMPTS[index] };
+}
+
+// Every third quiz question is about Hangul's creation so the large word pool
+// does not crowd those questions out.
+function currentQuizPrompt(progress) {
+  const position = progress.promptIndex;
+  if (position % 3 === 2) {
+    const index = deckIndex(progress, 'hangul', HANGUL_CREATION_QUIZ_PROMPTS.length, Math.floor(position / 3));
+    return { id: `quiz-${position}-hangul-${index}`, prompt: HANGUL_CREATION_QUIZ_PROMPTS[index] };
+  }
+  const index = deckIndex(progress, 'wordQuiz', WORD_QUIZ_PROMPTS.length, position - Math.floor(position / 3));
+  return { id: `quiz-${position}-word-${index}`, prompt: WORD_QUIZ_PROMPTS[index] };
+}
+
+function currentPlacementPrompt(progress) {
+  const index = deckIndex(progress, 'placement', PLACEMENT_PROMPTS.length, progress.promptIndex);
+  return { id: `placement-${progress.promptIndex}-${index}`, sentence: PLACEMENT_PROMPTS[index] };
+}
+
+// Korean typing speed is counted in keystrokes (타): a syllable costs one key
+// for the initial consonant, one or two for the vowel, and zero to two for the
+// final consonant, depending on whether they are compound jamo.
+const COMPOUND_VOWELS = new Set([9, 10, 11, 14, 15, 16, 19]);
+const COMPOUND_FINALS = new Set([3, 5, 6, 9, 10, 11, 12, 13, 14, 15, 18]);
+
+function keystrokesFor(char) {
+  const code = char.codePointAt(0) - 0xac00;
+  if (code < 0 || code > 11171) return 1;
+  const vowel = Math.floor(code / 28) % 21;
+  const final = code % 28;
+  return 1 + (COMPOUND_VOWELS.has(vowel) ? 2 : 1) + (final === 0 ? 0 : COMPOUND_FINALS.has(final) ? 2 : 1);
+}
+
+function correctKeystrokes(input, expected) {
+  const typed = [...normalizeSentence(input)];
+  const target = [...expected];
+  let total = 0;
+  target.forEach((char, index) => {
+    if (typed[index] === char) total += keystrokesFor(char);
+  });
+  return total;
+}
+
+// Strongest typists pick first; each one joins the weaker team that still has
+// room, so team sizes differ by at most one and total speed stays close.
+function assignTeamsBySkill(players) {
+  const maxSize = Math.ceil(players.length / 2);
+  const teams = { blue: { size: 0, total: 0 }, white: { size: 0, total: 0 } };
+  const ranked = players.map((player, order) => ({ player, order }))
+    .sort((a, b) => (b.player.typingSpeed - a.player.typingSpeed) || (a.order - b.order));
+  for (const { player } of ranked) {
+    const open = ['blue', 'white'].filter((team) => teams[team].size < maxSize);
+    const team = open.sort((a, b) => (teams[a].total - teams[b].total) || (teams[a].size - teams[b].size))[0];
+    player.team = team;
+    teams[team].size += 1;
+    teams[team].total += player.typingSpeed;
+  }
+}
 
 const REPAIR_PROMPTS = [
   {
@@ -166,6 +319,21 @@ const RELAY_PROMPTS = [
   '훈민정음은 1446년에 세상에 반포되었습니다.',
   '한글의 자음과 모음에는 소리를 생각한 원리가 담겨 있습니다.',
   '오늘도 바른 우리말로 서로의 마음을 따뜻하게 전해요.',
+];
+
+const PLACEMENT_PROMPTS = [
+  '한글은 세종대왕이 만든 글자입니다.',
+  '우리말을 바르고 고운 말로 써요.',
+  '가을 하늘이 맑고 높습니다.',
+  '친구와 함께 줄다리기를 해요.',
+  '훈민정음은 백성을 위한 글자예요.',
+  '책을 읽으면 생각이 쑥쑥 자라요.',
+  '바람이 살랑살랑 불어옵니다.',
+  '우리 반 모두 힘을 모아요.',
+  '또박또박 정확하게 입력해요.',
+  '한글날에는 우리말을 더 아껴요.',
+  '햇살이 운동장을 따뜻하게 비춰요.',
+  '서로 도우면 무엇이든 할 수 있어요.',
 ];
 
 const MODES = [
@@ -315,20 +483,22 @@ function getMode(room) {
 
 function getPromptFor(room, player) {
   const game = room.game;
+  if (game.phase === 'placement' && player?.progress) {
+    const { id, sentence } = currentPlacementPrompt(player.progress);
+    return { kind: 'placement', id, sentence };
+  }
   if (game.phase !== 'round' || !player || player.spectator) return null;
   const mode = getMode(room);
   if (!mode) return null;
 
   if (mode.id === 'word') {
-    const index = player.progress.promptIndex % WORD_PROMPTS.length;
-    const prompt = WORD_PROMPTS[index];
-    return { kind: 'word', id: `word-${index}`, word: prompt.word, category: prompt.category, length: [...prompt.word].length };
+    const { id, prompt } = currentWordPrompt(player.progress);
+    return { kind: 'word', id, word: prompt.word, category: prompt.category, length: [...prompt.word].length };
   }
 
   if (mode.id === 'quiz') {
-    const index = player.progress.promptIndex % QUIZ_PROMPTS.length;
-    const prompt = QUIZ_PROMPTS[index];
-    return { kind: 'quiz', id: `quiz-${index}`, category: prompt.category, meaning: prompt.meaning, choices: prompt.choices };
+    const { id, prompt } = currentQuizPrompt(player.progress);
+    return { kind: 'quiz', id, category: prompt.category, meaning: prompt.meaning, choices: prompt.choices };
   }
 
   if (mode.id === 'repair') {
@@ -375,6 +545,9 @@ function publicStateFor(room, player) {
     timeRemainingMs: game.phase === 'round' ? Math.max(0, game.roundEndsAt - Date.now()) : 0,
     intermissionRemainingMs: game.phase === 'intermission' ? Math.max(0, game.intermissionUntil - Date.now()) : 0,
     wheelRemainingMs: game.phase === 'wheel' ? Math.max(0, game.wheelEndsAt - Date.now()) : 0,
+    placementRemainingMs: game.phase === 'placement' ? Math.max(0, game.placementEndsAt - Date.now()) : 0,
+    placementDurationMs: PLACEMENT_MS,
+    teamRevealRemainingMs: game.phase === 'teamReveal' ? Math.max(0, game.teamRevealUntil - Date.now()) : 0,
     wheelDurationMs: WHEEL_DURATION_MS,
     wheelSelectedIndex: game.wheelSelectedIndex,
     overtimeCount: game.overtimeCount,
@@ -399,6 +572,9 @@ function publicStateFor(room, player) {
       characterId: player.characterId,
       isHost: player.isHost,
       spectator: player.spectator,
+      // Typing results stay private to each player; others only see teams.
+      placementKeystrokes: player.placementKeystrokes || 0,
+      typingSpeed: player.typingSpeed ?? null,
     } : null,
     players: [...room.players.values()].map((entry) => ({
       id: entry.id,
@@ -408,6 +584,7 @@ function publicStateFor(room, player) {
       isHost: entry.isHost,
       spectator: entry.spectator,
       connected: entry.ws.readyState === entry.ws.OPEN,
+      scoreCount: entry.scoreCount || 0,
     })),
     prompt: getPromptFor(room, player),
     relay: game.relay ? {
@@ -458,6 +635,11 @@ function addTeamScore(room, team, score, checkWin = true) {
   game.scores[team] += weighted * multiplier;
 
   if (checkWin) checkRopeWin(room);
+}
+
+// Clients flash a player's name tag whenever this counter goes up.
+function creditPlayer(player, score) {
+  if (player && score > 0) player.scoreCount = (player.scoreCount || 0) + 1;
 }
 
 function calculateTypedScore(input, expected, elapsedMs, mode = 'word') {
@@ -621,6 +803,8 @@ function finishRelayDuel(room) {
   const blueScore = blue?.exact ? Math.max(0, 60 + Math.min(40, 40 * (1 - blue.elapsedMs / RELAY_LIMIT_MS))) : 0;
   const whiteScore = white?.exact ? Math.max(0, 60 + Math.min(40, 40 * (1 - white.elapsedMs / RELAY_LIMIT_MS))) : 0;
 
+  creditPlayer(room.players.get(relay.blueId), blueScore);
+  creditPlayer(room.players.get(relay.whiteId), whiteScore);
   if (blueScore) addTeamScore(room, 'blue', blueScore, false);
   if (whiteScore) addTeamScore(room, 'white', whiteScore, false);
   checkRopeWin(room);
@@ -634,20 +818,60 @@ function finishRelayDuel(room) {
   }, 1_800);
 }
 
+function handlePlacementAnswer(room, player, answer) {
+  const game = room.game;
+  if (!player.progress) return;
+  if (Date.now() >= game.placementEndsAt) return finishPlacement(room);
+  const { sentence } = currentPlacementPrompt(player.progress);
+  const keystrokes = correctKeystrokes(answer, sentence);
+  player.placementKeystrokes = (player.placementKeystrokes || 0) + keystrokes;
+  player.progress.promptIndex += 1;
+  player.progress.promptStartedAt = Date.now();
+  send(player.ws, {
+    type: 'placementResult',
+    correct: normalizeSentence(answer) === sentence,
+    keystrokes,
+    totalKeystrokes: player.placementKeystrokes,
+  });
+  broadcast(room);
+}
+
+function finishPlacement(room) {
+  const game = room.game;
+  if (game.phase !== 'placement') return;
+  const minutes = PLACEMENT_MS / 60_000;
+  const players = getActivePlayers(room);
+  for (const player of players) {
+    player.typingSpeed = Math.round((player.placementKeystrokes || 0) / minutes);
+  }
+  assignTeamsBySkill(players);
+  game.rosterCounts = getActivePlayers(room).reduce((counts, player) => {
+    counts[player.team] += 1;
+    return counts;
+  }, { blue: 0, white: 0 });
+  game.phase = 'teamReveal';
+  game.teamRevealUntil = Date.now() + TEAM_REVEAL_MS;
+  game.notice = '타자 실력이 비슷하도록 팀을 나눴어요!';
+  broadcast(room);
+}
+
 function handleTypedAnswer(player, answer) {
   const room = getRoomForPlayer(player);
   if (!room) return;
   const game = room.game;
+  if (game.phase === 'placement') return handlePlacementAnswer(room, player, answer);
   if (game.phase !== 'round' || !player.progress || !getMode(room)) return;
   if (Date.now() >= game.roundEndsAt) return finishRound(room);
   const mode = getMode(room);
   if (!['word', 'repair'].includes(mode.id)) return;
 
-  const index = player.progress.promptIndex % (mode.id === 'word' ? WORD_PROMPTS.length : REPAIR_PROMPTS.length);
-  const source = mode.id === 'word' ? WORD_PROMPTS[index] : REPAIR_PROMPTS[index];
+  const source = mode.id === 'word'
+    ? currentWordPrompt(player.progress).prompt
+    : REPAIR_PROMPTS[player.progress.promptIndex % REPAIR_PROMPTS.length];
   const expected = mode.id === 'word' ? source.word : source.answer;
   const elapsedMs = Date.now() - player.progress.promptStartedAt;
   const result = calculateTypedScore(answer, expected, elapsedMs, mode.id);
+  creditPlayer(player, result.score);
   addTeamScore(room, player.team, result.score);
   player.progress.promptIndex += 1;
   player.progress.promptStartedAt = Date.now();
@@ -674,13 +898,13 @@ function handleChoice(player, choice) {
   const game = room.game;
   if (game.phase !== 'round' || getMode(room)?.id !== 'quiz') return;
   if (Date.now() >= game.roundEndsAt) return finishRound(room);
-  const index = player.progress.promptIndex % QUIZ_PROMPTS.length;
-  const prompt = QUIZ_PROMPTS[index];
+  const { prompt } = currentQuizPrompt(player.progress);
   const elapsedMs = Date.now() - player.progress.promptStartedAt;
   const correct = choice === prompt.answer;
   const speedBonus = Math.max(0, 40 * (1 - Math.min(elapsedMs, 8_000) / 8_000));
   const score = correct ? 60 + speedBonus : 0;
 
+  creditPlayer(player, score);
   addTeamScore(room, player.team, score);
   player.progress.promptIndex += 1;
   player.progress.promptStartedAt = Date.now();
@@ -721,18 +945,25 @@ function startGame(player) {
   if (!room) return;
   const game = room.game;
   if (!player.isHost || game.phase !== 'lobby') return;
-  const counts = getCounts(room);
-  if (counts.blue < 1 || counts.white < 1) {
-    send(player.ws, { type: 'error', message: '청팀과 백팀에 각각 한 명 이상 있어야 시작할 수 있어요.' });
+  if (room.players.size < 2) {
+    send(player.ws, { type: 'error', message: '두 명 이상 모여야 팀을 나누고 시작할 수 있어요.' });
     return;
   }
 
+  // Teams are decided by a short typing test before round 1.
+  const now = Date.now();
   room.game = createGame();
-  room.game.rosterCounts = counts;
+  room.game.phase = 'placement';
+  room.game.placementEndsAt = now + PLACEMENT_MS;
+  room.game.notice = '타자 실력을 재고 있어요. 문장을 정확하게 입력해 주세요!';
   for (const entry of room.players.values()) {
     entry.spectator = false;
+    entry.progress = { promptIndex: 0, promptStartedAt: now };
+    entry.placementKeystrokes = 0;
+    entry.typingSpeed = null;
+    entry.scoreCount = 0;
   }
-  beginRound(room, 0);
+  broadcast(room);
 }
 
 function resetToLobby(player) {
@@ -840,6 +1071,10 @@ function tick() {
     if (game.phase === 'round') {
       if (now >= game.roundEndsAt) finishRound(room);
       else if (game.mode === 'relay' && game.relay && now >= game.relay.deadline) finishRelayDuel(room);
+    } else if (game.phase === 'placement' && now >= game.placementEndsAt) {
+      finishPlacement(room);
+    } else if (game.phase === 'teamReveal' && now >= game.teamRevealUntil) {
+      beginRound(room, 0);
     } else if (game.phase === 'intermission' && now >= game.intermissionUntil) {
       beginRound(room, game.roundIndex + 1);
     } else if (game.phase === 'wheel' && now >= game.wheelEndsAt) {

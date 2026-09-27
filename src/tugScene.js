@@ -13,15 +13,17 @@ const ASSET_URLS = {
 
 const imageCache = new Map();
 const trimRectCache = new Map();
+const cutoutCache = new Map();
 // Fallback height when a team has no active pulling sprite.
 const ROPE_Y = -1.39;
 const ROPE_Z = 1.34;
 const ROPE_TRAVEL = 1.15;
-// Height of the baked-in rope tip relative to each tug sprite's center.
-// The four rows in the two supplied sheets use different grip heights.
-const GRIP_Y_OFFSETS = {
-  blue: [-0.44, -0.62, -0.28, -0.25],
-  white: [-0.49, -0.5, -0.32, -0.28],
+// Pull poses overhang the nominal grid: legs drop below the row line and tails
+// reach into the previous column. Row bands follow the transparent gaps in each
+// sheet, and `leftReach` covers the tails.
+const TUG_SHEETS = {
+  blue: { columns: 5, column: 3, leftReach: 60, rowBands: [[0, 309], [309, 552], [552, 798], [798, 1086]] },
+  white: { columns: 6, column: 4, leftReach: 50, rowBands: [[0, 291], [291, 561], [561, 801], [801, 1086]] },
 };
 const CHARACTER_ROWS = {
   rabbit: 0,
@@ -45,17 +47,6 @@ function loadImage(url) {
   });
   imageCache.set(url, promise);
   return promise;
-}
-
-function gridRect(image, columns, rows, column, row, inset = 0) {
-  const cellWidth = image.naturalWidth / columns;
-  const cellHeight = image.naturalHeight / rows;
-  return {
-    x: Math.round(column * cellWidth + inset),
-    y: Math.round(row * cellHeight + inset),
-    w: Math.round(cellWidth - inset * 2),
-    h: Math.round(cellHeight - inset * 2),
-  };
 }
 
 function alphaTrimRect(image, rect, padding = 5) {
@@ -104,6 +95,108 @@ function alphaTrimRect(image, rect, padding = 5) {
   return trimmed;
 }
 
+// Characters in the supplied sheets spill past their grid cells and sometimes
+// touch a neighbour, so a plain rectangle either clips them or picks up stray
+// pieces. Keep only the alpha islands that belong to `core`: an island is kept
+// unless it pokes in from the search border while living mostly outside core.
+function isolateCutout(image, search, core, padding = 5) {
+  const key = `${image.src}:${search.x}:${search.y}:${search.w}:${search.h}:${core.x}:${core.y}:${core.w}:${core.h}:${padding}`;
+  const cached = cutoutCache.get(key);
+  if (cached) return cached;
+
+  const { w, h } = search;
+  const source = document.createElement('canvas');
+  source.width = w;
+  source.height = h;
+  const sourceContext = source.getContext('2d', { willReadFrequently: true });
+  sourceContext.drawImage(image, search.x, search.y, w, h, 0, 0, w, h);
+  const imageData = sourceContext.getImageData(0, 0, w, h);
+  const pixels = imageData.data;
+  const labels = new Int32Array(w * h);
+  const stack = new Int32Array(w * h);
+  const coreLeft = core.x - search.x;
+  const coreTop = core.y - search.y;
+  const coreRight = coreLeft + core.w;
+  const coreBottom = coreTop + core.h;
+  const kept = [false];
+  let minX = w;
+  let minY = h;
+  let maxX = -1;
+  let maxY = -1;
+
+  for (let start = 0; start < w * h; start += 1) {
+    if (labels[start] || pixels[start * 4 + 3] <= 12) continue;
+    const label = kept.length;
+    const island = [];
+    let count = 0;
+    let coreCount = 0;
+    let touchesEdge = false;
+    let top = 0;
+    stack[top++] = start;
+    labels[start] = label;
+    while (top) {
+      const index = stack[--top];
+      island.push(index);
+      const x = index % w;
+      const y = (index - x) / w;
+      count += 1;
+      if (x >= coreLeft && x < coreRight && y >= coreTop && y < coreBottom) coreCount += 1;
+      if (x === 0 || y === 0 || x === w - 1 || y === h - 1) touchesEdge = true;
+      for (let dy = -1; dy <= 1; dy += 1) {
+        for (let dx = -1; dx <= 1; dx += 1) {
+          const nx = x + dx;
+          const ny = y + dy;
+          if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
+          const next = ny * w + nx;
+          if (labels[next] || pixels[next * 4 + 3] <= 12) continue;
+          labels[next] = label;
+          stack[top++] = next;
+        }
+      }
+    }
+    const keep = count >= 30 && (!touchesEdge || coreCount * 2 >= count);
+    kept.push(keep);
+    if (!keep) continue;
+    for (const index of island) {
+      const x = index % w;
+      const y = (index - x) / w;
+      minX = Math.min(minX, x);
+      minY = Math.min(minY, y);
+      maxX = Math.max(maxX, x);
+      maxY = Math.max(maxY, y);
+    }
+  }
+
+  for (let index = 0; index < w * h; index += 1) {
+    if (!kept[labels[index]]) pixels[index * 4 + 3] = 0;
+  }
+  sourceContext.putImageData(imageData, 0, 0);
+
+  if (maxX < 0) {
+    cutoutCache.set(key, source);
+    return source;
+  }
+  const left = Math.max(0, minX - padding);
+  const topEdge = Math.max(0, minY - padding);
+  const width = Math.min(w, maxX + padding + 1) - left;
+  const height = Math.min(h, maxY + padding + 1) - topEdge;
+  const cutout = document.createElement('canvas');
+  cutout.width = width;
+  cutout.height = height;
+  cutout.getContext('2d').drawImage(source, left, topEdge, width, height, 0, 0, width, height);
+  cutoutCache.set(key, cutout);
+  return cutout;
+}
+
+function canvasTexture(canvas) {
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.minFilter = THREE.LinearFilter;
+  texture.magFilter = THREE.LinearFilter;
+  texture.needsUpdate = true;
+  return texture;
+}
+
 function cropTexture(image, rect, flipX = false) {
   const canvas = document.createElement('canvas');
   canvas.width = rect.w;
@@ -115,12 +208,7 @@ function cropTexture(image, rect, flipX = false) {
     context.scale(-1, 1);
   }
   context.drawImage(image, rect.x, rect.y, rect.w, rect.h, 0, 0, rect.w, rect.h);
-  const texture = new THREE.CanvasTexture(canvas);
-  texture.colorSpace = THREE.SRGBColorSpace;
-  texture.minFilter = THREE.LinearFilter;
-  texture.magFilter = THREE.LinearFilter;
-  texture.needsUpdate = true;
-  return texture;
+  return canvasTexture(canvas);
 }
 
 function fullTexture(image) {
@@ -149,6 +237,83 @@ function addCroppedSprite(parent, image, rect, pixelUnit, scale, position, z, pa
   const trimmedRect = alphaTrimRect(image, rect, padding);
   const texture = cropTexture(image, trimmedRect, flipX);
   const sprite = makeSprite(texture, trimmedRect.w * pixelUnit, trimmedRect.h * pixelUnit, scale, z);
+  sprite.position.set(...position);
+  parent?.add(sprite);
+  return sprite;
+}
+
+function mirrored(canvas) {
+  const flipped = document.createElement('canvas');
+  flipped.width = canvas.width;
+  flipped.height = canvas.height;
+  const context = flipped.getContext('2d');
+  context.translate(canvas.width, 0);
+  context.scale(-1, 1);
+  context.drawImage(canvas, 0, 0);
+  return flipped;
+}
+
+// The baked-in rope tail is what reaches the right edge of a pull pose, so the
+// top-most opaque run in the right-most column marks the grip height.
+function ropeTipY(canvas) {
+  const context = canvas.getContext('2d', { willReadFrequently: true });
+  const { width, height } = canvas;
+  const pixels = context.getImageData(0, 0, width, height).data;
+  for (let x = width - 1; x >= 0; x -= 1) {
+    let start = -1;
+    for (let y = 0; y < height; y += 1) {
+      const opaque = pixels[(y * width + x) * 4 + 3] > 12;
+      if (opaque && start < 0) start = y;
+      if (!opaque && start >= 0) return (start + y - 1) / 2;
+    }
+    if (start >= 0) return (start + height - 1) / 2;
+  }
+  return height / 2;
+}
+
+// Top of the head (ears included) and the horizontal centre of the top slice,
+// so a name tag hangs over the face rather than the sprite's bounding box.
+const headAnchorCache = new WeakMap();
+
+function headAnchor(canvas) {
+  const cached = headAnchorCache.get(canvas);
+  if (cached) return cached;
+  const { width, height } = canvas;
+  const pixels = canvas.getContext('2d', { willReadFrequently: true }).getImageData(0, 0, width, height).data;
+  let top = -1;
+  let sumX = 0;
+  let count = 0;
+  for (let y = 0; y < height; y += 1) {
+    if (top >= 0 && y > top + height * 0.22) break;
+    for (let x = 0; x < width; x += 1) {
+      if (pixels[(y * width + x) * 4 + 3] <= 12) continue;
+      if (top < 0) top = y;
+      sumX += x;
+      count += 1;
+    }
+  }
+  const anchor = count ? { x: sumX / count, y: top } : { x: width / 2, y: 0 };
+  headAnchorCache.set(canvas, anchor);
+  return anchor;
+}
+
+function tugRects(image, sheet, row) {
+  const cellWidth = image.naturalWidth / sheet.columns;
+  const [top, bottom] = sheet.rowBands[row];
+  const left = Math.round(sheet.column * cellWidth);
+  // The rope tail runs into the next pose, so the right edge stays on the grid
+  // line; the drawn rope covers that cut.
+  const right = Math.round((sheet.column + 1) * cellWidth) - 2;
+  return {
+    search: { x: left - sheet.leftReach, y: top, w: right - left + sheet.leftReach, h: bottom - top },
+    core: { x: left, y: top, w: right - left, h: bottom - top },
+  };
+}
+
+function addIsolatedSprite(parent, image, search, core, pixelUnit, scale, position, z, flipX = false) {
+  const isolated = isolateCutout(image, search, core);
+  const cutout = flipX ? mirrored(isolated) : isolated;
+  const sprite = makeSprite(canvasTexture(cutout), cutout.width * pixelUnit, cutout.height * pixelUnit, scale, z);
   sprite.position.set(...position);
   parent?.add(sprite);
   return sprite;
@@ -230,69 +395,119 @@ function createRope(images, pixelUnit, layout) {
   return rope;
 }
 
-function getCrowdLayout(data) {
+// resize() never shows less than ±7.2 world units horizontally, and the whole
+// crowd slides up to ROPE_TRAVEL with the rope, so a team line ending inside
+// this limit stays on screen at every aspect ratio and rope position.
+const TUG_OUTER_LIMIT = 7.15 - ROPE_TRAVEL;
+// Keeps the innermost puller clear of the judge in the middle.
+const TUG_INNER_LIMIT = 1.1;
+const CROWDED_TEAM_SIZE = 4;
+
+// Distances from the centre line, innermost puller first.
+function teamSlots(count, halfWidth) {
+  if (!count) return [];
+  const outer = TUG_OUTER_LIMIT - halfWidth;
+  const inner = TUG_INNER_LIMIT + halfWidth;
+  const gap = count > 1 ? Math.min(1.45, (outer - inner) / (count - 1)) : 0;
+  const spread = (count - 1) * gap;
+  const center = Math.max(inner + spread / 2, Math.min(4.4, outer - spread / 2));
+  return Array.from({ length: count }, (_, index) => center - spread / 2 + index * gap);
+}
+
+function getCrowdLayout(data, images, pixelUnit) {
   const activePlayers = (data.players || []).filter((player) => !player.spectator);
   const blueCount = activePlayers.filter((player) => player.team === 'blue').length;
   const whiteCount = activePlayers.filter((player) => player.team === 'white').length;
   const scaleFactor = 1 - Math.min(28, Math.max(0, activePlayers.length - 2)) * (0.6 / 28);
-  const gapFor = (count) => Math.min(1.45, 5.2 / Math.max(1, count));
-  const attachFor = (count) => 4.4 + Math.max(0, count - 1) * gapFor(count) / 2 - 0.7 * scaleFactor;
+  const characterScale = 0.86 * scaleFactor;
+  const halfWidthFor = (image, sheet) => (image.naturalWidth / sheet.columns + sheet.leftReach + 10) / 2 * pixelUnit * characterScale;
+  const slots = {
+    blue: teamSlots(blueCount, halfWidthFor(images.blueMascots, TUG_SHEETS.blue)),
+    white: teamSlots(whiteCount, halfWidthFor(images.whiteMascots, TUG_SHEETS.white)),
+  };
+  const attachFor = (teamSlotsList) => (teamSlotsList.at(-1) ?? 4.4) - 0.7 * scaleFactor;
   return {
-    characterScale: 0.86 * scaleFactor,
+    characterScale,
     scaleFactor,
+    slots,
     gripY: -1.54 - (1 - scaleFactor) * 0.58,
-    leftAttachX: -attachFor(blueCount),
-    rightAttachX: attachFor(whiteCount),
-    ropeThickness: 0.27 * (0.7 + 0.3 * scaleFactor),
+    leftAttachX: -attachFor(slots.blue),
+    rightAttachX: attachFor(slots.white),
+    ropeThickness: 0.27 * (0.4 + 0.6 * scaleFactor),
   };
 }
 
 function createCharacters(scene, images, data, pixelUnit, layout) {
   const characters = [];
-  const sheetInfo = {
-    // The supplied pull poses extend beyond their nominal grid cells so the
-    // rope tail is not clipped before it reaches the dynamic center rope.
-    blue: {
-      image: images.blueMascots,
-      columns: 5,
-      rows: 4,
-      tugRect: (row) => gridRect(images.blueMascots, 5, 4, 3, row, 2),
-    },
-    white: {
-      image: images.whiteMascots,
-      columns: 6,
-      rows: 4,
-      tugRect: (row) => gridRect(images.whiteMascots, 6, 4, 4, row, 2),
-    },
-  };
+  const sheetImages = { blue: images.blueMascots, white: images.whiteMascots };
+  const unit = pixelUnit * layout.characterScale;
 
   for (const team of ['blue', 'white']) {
     const players = (data.players || []).filter((player) => player.team === team && !player.spectator);
     const side = team === 'blue' ? -1 : 1;
-    const info = sheetInfo[team];
-    const gap = Math.min(1.45, 5.2 / Math.max(players.length, 1));
+    const image = sheetImages[team];
 
     players.forEach((player, index) => {
-      const offset = index - (players.length - 1) / 2;
       const row = CHARACTER_ROWS[player.characterId] ?? 0;
-      const baseX = side * 4.4 - side * offset * gap;
-      const baseY = layout.gripY - GRIP_Y_OFFSETS[team][row] * layout.scaleFactor;
-      const tugRect = info.tugRect?.(row) || gridRect(info.image, info.columns, info.rows, info.tugColumn, row, 3);
-      const tug = addCroppedSprite(scene, info.image, tugRect, pixelUnit, layout.characterScale, [baseX, baseY, 1.12], 1.12, 3, team === 'white');
+      const { search, core } = tugRects(image, TUG_SHEETS[team], row);
+      const cutout = isolateCutout(image, search, core);
+      const baseX = side * layout.slots[team][index];
+      // A crowded team alternates sides of the rope like a real tug line: the
+      // near side sits lower and in front of the rope, the far side higher and
+      // behind it, which doubles the spacing between faces in each lane.
+      const lane = players.length >= CROWDED_TEAM_SIZE ? (index % 2 === 0 ? 1 : -1) : 0;
+      const laneOffsetY = -lane * 0.12 * cutout.height * unit;
+      const z = lane > 0 ? ROPE_Z + 0.04 : 1.12;
+      const baseY = layout.gripY - (cutout.height / 2 - ropeTipY(cutout)) * unit + laneOffsetY;
+      const tug = addIsolatedSprite(scene, image, search, core, pixelUnit, layout.characterScale, [baseX, baseY, z], z, team === 'white');
       tug.name = `${team}-${player.characterId}-tug`;
-      characters.push({ tug, team, baseX, baseY, footY: baseY - 1.05 * layout.scaleFactor });
+      const head = headAnchor(cutout);
+      const headOffsetX = (head.x - cutout.width / 2) * unit * (team === 'white' ? -1 : 1);
+      characters.push({
+        tug,
+        team,
+        lane,
+        baseX,
+        baseY,
+        footY: baseY - (cutout.height / 2 - 12) * unit,
+        playerId: player.id,
+        name: player.name,
+        headOffsetX,
+        headOffsetY: (cutout.height / 2 - head.y) * unit,
+      });
     });
   }
   return characters;
 }
 
 function createJudge(scene, images, pixelUnit) {
-  // The first Sejong pose reaches a little beyond the first nominal cell.
-  // Give it breathing room before alpha trimming so his arms are never sliced.
-  const judgeRect = { x: 48, y: 2, w: 305, h: 220 };
-  const front = addCroppedSprite(scene, images.chibi, judgeRect, pixelUnit, 0.92, [0, 0.18, 1.18], 1.18);
+  // The first Sejong pose runs from the hat (y≈4) to the shoes (y≈328), and the
+  // next row's hair starts right below him, so isolate him instead of slicing.
+  const front = addIsolatedSprite(
+    scene,
+    images.chibi,
+    { x: 40, y: 0, w: 320, h: 346 },
+    { x: 64, y: 0, w: 280, h: 300 },
+    pixelUnit,
+    0.8,
+    [0, -0.12, 1.18],
+    1.18,
+  );
   front.name = 'sejong-judge-sprite';
   return front;
+}
+
+// Rows in the cheerleader sheet are separated by transparent gaps near these
+// y values, not by the 362px grid, so feet and drums overhang the grid rows.
+const CHEER_ROW_BANDS = [[0, 400], [400, 740], [740, 1086]];
+
+function cheerRects(image, column, row) {
+  const cellWidth = image.naturalWidth / 6;
+  const [top, bottom] = CHEER_ROW_BANDS[row];
+  const core = { x: Math.round(column * cellWidth), y: top, w: Math.round(cellWidth), h: bottom - top };
+  const left = Math.max(0, core.x - 24);
+  const right = Math.min(image.naturalWidth, core.x + core.w + 24);
+  return { search: { x: left, y: top, w: right - left, h: bottom - top }, core };
 }
 
 function createCheerleaders(scene, images, pixelUnit) {
@@ -304,7 +519,8 @@ function createCheerleaders(scene, images, pixelUnit) {
     [5.95, -0.25, 0.64, 2],
   ];
   positions.forEach(([x, y, scale, column], index) => {
-    const sprite = addCroppedSprite(scene, images.cheerleaders, gridRect(images.cheerleaders, 6, 3, column, index % 2, 3), pixelUnit, scale, [x, y, 0.25], 0.25);
+    const { search, core } = cheerRects(images.cheerleaders, column, index % 2);
+    const sprite = addIsolatedSprite(scene, images.cheerleaders, search, core, pixelUnit, scale, [x, y, 0.25], 0.25);
     sprite.name = `joseon-cheerleader-${index}`;
     cheerleaders.push({ sprite, baseY: y, phase: index * 0.7 });
   });
@@ -347,7 +563,120 @@ function createFootDust(scene, characters, scaleFactor) {
   return puffs;
 }
 
-export function mountTugScene(container, data) {
+const NAME_TAG_MAX_TIERS = 4;
+const NAME_TAG_GAP_PX = 4;
+
+function createNameTags(container, characters, selfId) {
+  const layer = document.createElement('div');
+  layer.className = 'name-layer';
+  layer.setAttribute('aria-hidden', 'true');
+  for (const character of characters) {
+    const tag = document.createElement('div');
+    tag.className = `name-tag name-tag--${character.team}`;
+    const pill = document.createElement('span');
+    pill.className = 'name-tag__pill';
+    if (character.playerId === selfId) {
+      tag.classList.add('is-self');
+      const me = document.createElement('b');
+      me.textContent = '나';
+      pill.append(me);
+    }
+    const name = document.createElement('span');
+    name.className = 'name-tag__name';
+    name.textContent = character.name;
+    pill.append(name);
+    const line = document.createElement('i');
+    line.className = 'name-tag__line';
+    tag.append(pill, line);
+    layer.append(tag);
+    character.nameTag = { el: tag, line, dy: 0, flashSeen: 0, flashing: false };
+  }
+  container.append(layer);
+  return layer;
+}
+
+// Greedy interval tiering: the viewer's own tag claims tier 0 first, then the
+// rest take the lowest tier where they do not overlap. When a team needs more
+// than NAME_TAG_MAX_TIERS, other tags shrink, and then only the viewer's own
+// tag stays (others reappear while they flash after scoring).
+function assignTiers(members, anchorsX) {
+  const tiers = [];
+  const placed = new Map();
+  const order = [...members.keys()].sort((a, b) => {
+    const selfA = members[a].nameTag.el.classList.contains('is-self') ? 0 : 1;
+    const selfB = members[b].nameTag.el.classList.contains('is-self') ? 0 : 1;
+    return (selfA - selfB) || (anchorsX[a] - anchorsX[b]);
+  });
+  for (const index of order) {
+    const tag = members[index].nameTag;
+    if (tag.el.classList.contains('is-idle')) continue;
+    const half = tag.el.offsetWidth / 2 + NAME_TAG_GAP_PX / 2;
+    const left = anchorsX[index] - half;
+    const right = anchorsX[index] + half;
+    let tier = 0;
+    while (tiers[tier]?.some(([start, end]) => left < end && right > start)) tier += 1;
+    (tiers[tier] ??= []).push([left, right]);
+    placed.set(index, tier);
+  }
+  return { placed, tierCount: tiers.length };
+}
+
+function layoutNameTags(characters, camera, pxPerUnit) {
+  for (const team of ['blue', 'white']) {
+    const members = characters.filter((character) => character.team === team);
+    if (!members.length) continue;
+    const anchorsX = members.map((character) => (character.baseX + character.headOffsetX - camera.left) * pxPerUnit);
+    const anchorsY = members.map((character) => (camera.top - character.baseY - character.headOffsetY) * pxPerUnit);
+    const crowded = members.some((character) => character.lane !== 0);
+    let result;
+    for (const density of ['full', 'compact', 'selfOnly']) {
+      for (const { nameTag } of members) {
+        const isSelf = nameTag.el.classList.contains('is-self');
+        nameTag.el.classList.toggle('is-compact', density !== 'full' && !isSelf);
+        nameTag.el.classList.toggle('is-idle', density === 'selfOnly' && !isSelf);
+      }
+      result = assignTiers(members, anchorsX);
+      if (result.tierCount <= NAME_TAG_MAX_TIERS) break;
+    }
+    // In a crowded line every tag rises above the highest head so none of them
+    // sits on top of a back-lane face; thin leader lines point to each head.
+    const baseline = crowded ? Math.min(...anchorsY) : null;
+    members.forEach((character, index) => {
+      const tag = character.nameTag;
+      const height = tag.el.offsetHeight || 18;
+      const tier = result.placed.get(index) ?? 0;
+      const bottom = (baseline ?? anchorsY[index]) - NAME_TAG_GAP_PX - tier * (height + 3);
+      tag.dy = bottom - anchorsY[index];
+      tag.line.style.height = `${Math.max(0, -tag.dy)}px`;
+      tag.line.hidden = -tag.dy < 10;
+    });
+  }
+}
+
+function updateNameTags(characters, camera, pxPerUnit, flashUntil) {
+  const now = Date.now();
+  for (const character of characters) {
+    const tag = character.nameTag;
+    if (!tag) continue;
+    const x = (character.tug.position.x + character.headOffsetX - camera.left) * pxPerUnit;
+    const y = (camera.top - character.tug.position.y - character.headOffsetY) * pxPerUnit + tag.dy;
+    tag.el.style.transform = `translate(${x.toFixed(1)}px, ${y.toFixed(1)}px) translate(-50%, -100%)`;
+    const until = flashUntil?.get(character.playerId) || 0;
+    const flashing = until > now;
+    if (flashing && until > tag.flashSeen) {
+      // Restart the animation when the same player scores again mid-flash.
+      tag.el.classList.remove('is-flash');
+      void tag.el.offsetWidth;
+      tag.el.classList.add('is-flash');
+      tag.flashSeen = until;
+    } else if (!flashing && tag.flashing) {
+      tag.el.classList.remove('is-flash');
+    }
+    tag.flashing = flashing;
+  }
+}
+
+export function mountTugScene(container, data, { selfId, flashUntil } = {}) {
   let renderer;
   try {
     renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
@@ -381,6 +710,8 @@ export function mountTugScene(container, data) {
   let cheerleaders = [];
   let background;
   let built = false;
+  let nameLayer;
+  let pxPerUnit = 1;
 
   function resize() {
     const width = Math.max(320, container.clientWidth || 800);
@@ -395,13 +726,15 @@ export function mountTugScene(container, data) {
     renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
     renderer.setSize(width, height, false);
     if (background?.userData.resize) background.userData.resize(viewWidth, viewHeight);
+    pxPerUnit = (container.clientWidth || width) / viewWidth;
+    if (nameLayer) layoutNameTags(characters, camera, pxPerUnit);
   }
 
   loaded.then((images) => {
     if (disposed) return;
     const pixelUnit = 13.8 / 1448;
     background = addFullImagePlane(scene, images.arena, 14, 6.4);
-    layout = getCrowdLayout(data);
+    layout = getCrowdLayout(data, images, pixelUnit);
     characters = createCharacters(scene, images, data, pixelUnit, layout);
     rope = createRope(images, pixelUnit, layout);
     scene.add(rope);
@@ -409,6 +742,7 @@ export function mountTugScene(container, data) {
     cheerleaders = createCheerleaders(scene, images, pixelUnit);
     createTeamBanners(scene, images, pixelUnit);
     footDust = createFootDust(scene, characters, layout.scaleFactor);
+    nameLayer = createNameTags(container, characters, selfId);
     resize();
     built = true;
   }).catch((error) => {
@@ -445,6 +779,7 @@ export function mountTugScene(container, data) {
         sprite.position.y = footY + progress * 0.14 * layout.scaleFactor;
         sprite.scale.set((0.34 + progress * 0.23) * layout.scaleFactor, (0.2 + progress * 0.16) * layout.scaleFactor, 1);
       });
+      updateNameTags(characters, camera, pxPerUnit, flashUntil);
     }
     renderer.render(scene, camera);
   }
@@ -459,6 +794,7 @@ export function mountTugScene(container, data) {
       disposed = true;
       cancelAnimationFrame(animationId);
       resizeObserver?.disconnect();
+      nameLayer?.remove();
       scene.traverse((object) => {
         if (object.geometry) object.geometry.dispose();
         if (object.material) {
