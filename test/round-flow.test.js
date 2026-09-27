@@ -60,16 +60,23 @@ test('라운드별 승리, 10초 연장, 2:2 돌림판 결승', async (t) => {
   const white = watch(whiteSocket);
   blue.send({ type: 'createRoom', name: '청', characterId: 'bear' });
   const lobby = await blue.waitFor((state) => state.phase === 'lobby' && state.self?.team === 'blue');
+  assert.equal(lobby.prompt.kind, 'practice', '선생님이 시작하기 전에는 우리말 연습 문제가 보여요');
+  const practiceWord = lobby.prompt.word;
+  blue.send({ type: 'answer', answer: practiceWord });
+  const practiced = await blue.waitFor((state) => state.phase === 'lobby' && state.self?.practiceCount === 1);
+  assert.equal(practiced.prompt.kind, 'practice');
+  assert.notEqual(practiced.prompt.word, practiceWord, '연습을 제출하면 다음 순우리말로 넘어가요');
   white.send({ type: 'join', roomId: lobby.roomId, name: '백', characterId: 'cat' });
   await white.waitFor((state) => state.phase === 'lobby' && state.self?.team === 'white');
   blue.send({ type: 'start' });
 
   const placement = await blue.waitFor((state) => state.phase === 'placement');
   assert.equal(placement.prompt.kind, 'placement');
-  const reveal = await white.waitFor((state) => state.phase === 'teamReveal');
-  assert.equal(reveal.self.team, 'white', '아무도 치지 않으면 입장 순서대로 번갈아 배정돼요');
-  assert.equal(reveal.self.typingSpeed, 0);
   const first = await blue.waitFor((state) => state.phase === 'round' && state.roundIndex === 0);
+  const firstWhite = await white.waitFor((state) => state.phase === 'round' && state.roundIndex === 0);
+  assert.equal(firstWhite.self.team, 'white', '아무도 치지 않으면 입장 순서대로 번갈아 배정돼요');
+  assert.equal(firstWhite.self.typingSpeed, 0);
+  assert.equal(first.totalRounds, 5, '5라운드 결승 슬롯을 항상 보여 줘요');
   assert.equal(first.mode.duration, 900);
   const overtime = await blue.waitFor((state) => state.phase === 'round' && state.overtimeCount === 1);
   assert.equal(overtime.roundWins.blue, 0);
@@ -151,8 +158,8 @@ test('라운드별 승리, 10초 연장, 2:2 돌림판 결승', async (t) => {
     typist.send({ type: 'answer', answer: typing.prompt.sentence });
     await typist.waitFor((state) => state.self.placementKeystrokes > 0);
   }
-  const revealA = await fastA.waitFor((state) => state.phase === 'teamReveal');
-  const revealB = await fastB.waitFor((state) => state.phase === 'teamReveal');
+  const revealA = await fastA.waitFor((state) => state.phase === 'round' && state.roundIndex === 0);
+  const revealB = await fastB.waitFor((state) => state.phase === 'round' && state.roundIndex === 0);
   assert.ok(revealA.self.typingSpeed > 0);
   assert.notEqual(revealA.self.team, revealB.self.team);
   assert.deepEqual(revealA.counts, { blue: 2, white: 2 });

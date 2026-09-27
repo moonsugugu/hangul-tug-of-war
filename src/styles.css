@@ -214,6 +214,15 @@ main { width: min(1180px, calc(100% - 36px)); margin: 0 auto 60px; }
 .rope-labels { display: flex; justify-content: space-between; color: var(--muted); font-size: 9px; }
 
 .prompt-card { margin-top: 18px; padding: 25px; border: 1px solid #dfd5ca; border-radius: 23px; background: var(--paper); box-shadow: var(--shadow); text-align: center; }
+.practice-card { margin-top: 18px; padding: 24px; border-color: #c9d6f7; background: linear-gradient(135deg, rgba(245,249,255,.98), rgba(255,253,249,.98)); }
+.practice-card__head { display: flex; justify-content: space-between; align-items: flex-start; gap: 18px; text-align: left; }
+.practice-card__head h2 { margin: 7px 0 6px; color: var(--ink); font-family: 'Jua', sans-serif; font-size: clamp(22px, 3vw, 31px); font-weight: 400; }
+.practice-card__head p { max-width: 700px; margin: 0; line-height: 1.55; }
+.practice-count { flex: 0 0 auto; padding: 8px 11px; border: 1px solid #b8c9ff; border-radius: 99px; color: var(--blue-dark); background: var(--blue-soft); font-size: 11px; font-weight: 700; white-space: nowrap; }
+.practice-target { width: min(720px, 100%); margin: 20px auto 18px; padding: 17px 20px 15px; border: 1px solid #e4d5b7; border-radius: 17px; background: #fff8e7; text-align: center; }
+.practice-target strong { display: block; margin: 8px 0 3px; color: var(--ink); font-family: 'Jua', sans-serif; font-size: clamp(36px, 7vw, 60px); font-weight: 400; line-height: 1.15; }
+.practice-target p { margin: 0; color: #735c48; font-size: 14px; line-height: 1.5; }
+.practice-target small { display: block; margin-top: 7px; color: var(--muted); font-size: 11px; line-height: 1.45; }
 .prompt-meta { display: flex; justify-content: center; align-items: center; gap: 10px; flex-wrap: wrap; }
 .round-badge { padding: 6px 9px; border-radius: 99px; background: #f8e8dc; color: #bd6d63; font-size: 9px; font-weight: 700; letter-spacing: .08em; }
 .category-badge { padding: 6px 9px; border-radius: 99px; color: var(--blue-dark); background: var(--blue-soft); font-size: 10px; font-weight: 700; }
@@ -266,6 +275,9 @@ main { width: min(1180px, calc(100% - 36px)); margin: 0 auto 60px; }
 .round-chip { display: inline-flex; align-items: center; gap: 5px; padding: 7px 9px; border: 1px solid #ded5ca; border-radius: 99px; color: #a39a90; font-size: 10px; background: rgba(255,255,255,.45); }
 .round-chip b { width: 17px; height: 17px; display: grid; place-items: center; border-radius: 50%; background: #e9e1d7; font-size: 9px; }
 .round-chip.is-active { color: var(--blue-dark); border-color: #b8c9ff; background: var(--blue-soft); }
+.round-chip--final { color: #9d5d28; border-color: #e1c58d; background: rgba(255,248,225,.72); }
+.round-chip--final b { background: #e0b34f; }
+.round-chip.is-optional { opacity: .62; }
 .round-chip.is-active b, .round-chip.is-done b { color: white; background: var(--blue); }
 
 .notice { position: fixed; left: 50%; bottom: 25px; z-index: 20; transform: translateX(-50%); padding: 12px 17px; border-radius: 99px; color: white; background: var(--ink); box-shadow: 0 12px 26px rgba(0,0,0,.18); font-size: 12px; }
@@ -358,6 +370,8 @@ main { width: min(1180px, calc(100% - 36px)); margin: 0 auto 60px; }
   .room-qr-box { justify-self: center; }
   .room-link-row, .room-code-entry { grid-template-columns: 1fr; }
   .room-link-row .secondary-button, .room-code-entry .secondary-button { width: 100%; }
+  .practice-card__head { flex-direction: column; gap: 10px; }
+  .practice-count { align-self: flex-start; }
   .character-picker { gap: 6px; }
   .character-choice__art { font-size: 24px; }
   .character-choice__copy small { font-size: 7px; }

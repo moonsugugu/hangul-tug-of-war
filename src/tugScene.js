@@ -513,7 +513,13 @@ function createCharacters(scene, images, data, pixelUnit, layout) {
       const isolated = isolateCutout(image, search, core);
       const ropeY = ropeTipY(isolated);
       const cutout = trimRopeTail(isolated, ropeY);
-      const baseX = side * layout.slots[team][index];
+      // The row guides are deliberately generous because the supplied sheets
+      // have different transparent margins. Clamp the actual trimmed sprite,
+      // not just the guide-cell estimate, so a wide hat/ear/tail can never be
+      // cut by the arena edge on a narrow viewport.
+      const halfSpriteWidth = cutout.width * unit / 2;
+      const safeSlot = Math.min(layout.slots[team][index], TUG_OUTER_LIMIT - halfSpriteWidth);
+      const baseX = side * Math.max(TUG_INNER_LIMIT + halfSpriteWidth, safeSlot);
       // A crowded team staggers into a near and a far lane so faces peek out
       // between neighbours. The one shared rope is drawn over every puller, and
       // the height offset stays inside its thickness so all hands stay on it.
@@ -779,7 +785,10 @@ export function mountTugScene(container, data, { selfId, flashUntil } = {}) {
     const width = Math.max(320, container.clientWidth || 800);
     const height = Math.max(260, container.clientHeight || 430);
     const viewHeight = Math.max(6.4, 14.4 * height / width);
-    const viewWidth = viewHeight * (width / height);
+    // Keep the complete 14.4-unit stage visible even when the browser is
+    // portrait-shaped. Without this floor the outer pullers were rendered
+    // outside the camera and looked sliced in half.
+    const viewWidth = Math.max(14.4, viewHeight * (width / height));
     camera.left = -viewWidth / 2;
     camera.right = viewWidth / 2;
     camera.top = viewHeight / 2;

@@ -25,7 +25,7 @@ const ROPE_POINTS_PER_STEP = 75;
 const MAX_PLAYERS_PER_ROOM = 30;
 const CHARACTER_IDS = ['rabbit', 'bear', 'cat', 'chick', 'panda', 'sheep', 'fox', 'penguin'];
 
-const WORD_PROMPTS = [
+const BASE_WORD_PROMPTS = [
   { word: '윤슬', meaning: '햇빛이나 달빛이 물결에 비쳐 반짝이는 모습', example: '강물 위로 윤슬이 반짝였습니다.', category: '자연' },
   { word: '여우비', meaning: '햇빛이 있는 날 잠깐 내리는 비', example: '맑은 하늘에서 여우비가 내렸습니다.', category: '자연' },
   { word: '너울', meaning: '큰 물결', example: '바다에 너울이 일었습니다.', category: '자연' },
@@ -136,6 +136,158 @@ const WORD_PROMPTS = [
   { word: '까치설', meaning: '설날의 전날', example: '까치설에 가족이 모여 만두를 빚었습니다.', category: '문화' },
 ];
 
+const ADDITIONAL_WORD_PROMPTS = [
+  { word: '가랑비', meaning: '가늘고 조용히 내리는 비', example: '가랑비가 내려 우산을 펼쳤습니다.', category: '자연' },
+  { word: '가랑잎', meaning: '나뭇가지에서 떨어진 마른 잎', example: '가랑잎을 밟을 때마다 바스락 소리가 났습니다.', category: '자연' },
+  { word: '강바람', meaning: '강에서 불어오는 바람', example: '강바람이 불어 더위가 한결 가셨습니다.', category: '자연' },
+  { word: '갯벌', meaning: '바닷물이 드나드는 모래와 진흙의 벌판', example: '갯벌에서 조개를 관찰했습니다.', category: '자연' },
+  { word: '고드름', meaning: '처마 끝에 얼어붙은 얼음 기둥', example: '처마에 고드름이 길게 매달렸습니다.', category: '자연' },
+  { word: '골바람', meaning: '골짜기에서 불어 나오는 바람', example: '골바람이 산길을 시원하게 훑고 지나갔습니다.', category: '자연' },
+  { word: '그루터기', meaning: '나무를 베고 남은 밑동', example: '아이들은 그루터기에 앉아 잠시 쉬었습니다.', category: '자연' },
+  { word: '길섶', meaning: '길의 가장자리', example: '길섶에 작은 들꽃이 피었습니다.', category: '자연' },
+  { word: '나뭇결', meaning: '나무에 나타난 무늬나 질감', example: '나무 책상의 나뭇결이 아름다웠습니다.', category: '자연' },
+  { word: '너럭바위', meaning: '넓고 평평한 바위', example: '너럭바위에 앉아 물소리를 들었습니다.', category: '자연' },
+  { word: '다랑논', meaning: '산비탈을 계단처럼 만들어 놓은 논', example: '산골 마을의 다랑논이 초록빛으로 물들었습니다.', category: '자연' },
+  { word: '달개비', meaning: '여름에 파란 꽃이 피는 풀', example: '담장 아래 달개비 꽃이 피었습니다.', category: '자연' },
+  { word: '도랑', meaning: '물을 흘려보내려고 판 작은 개울', example: '빗물이 도랑을 따라 흘러갔습니다.', category: '자연' },
+  { word: '들꽃', meaning: '들에서 저절로 피는 꽃', example: '들꽃 한 송이를 꺾지 않고 눈으로만 감상했습니다.', category: '자연' },
+  { word: '물결', meaning: '물이 흔들려 이루는 잔무늬나 움직임', example: '연못에 물결이 동그랗게 퍼졌습니다.', category: '자연' },
+  { word: '물안개', meaning: '물 위에 피어오르는 안개', example: '새벽 강 위로 물안개가 피어올랐습니다.', category: '자연' },
+  { word: '물비늘', meaning: '물결에 햇빛이 비쳐 반짝이는 모양', example: '호수의 물비늘이 햇살을 받아 빛났습니다.', category: '자연' },
+  { word: '바람결', meaning: '바람이 부는 기세나 느낌', example: '바람결에 꽃향기가 실려 왔습니다.', category: '자연' },
+  { word: '보늬', meaning: '밤이나 도토리의 속껍질', example: '밤의 보늬를 조심스럽게 벗겼습니다.', category: '자연' },
+  { word: '봄볕', meaning: '봄철의 따뜻한 햇볕', example: '봄볕을 쬐며 운동장을 걸었습니다.', category: '자연' },
+  { word: '샘물', meaning: '땅에서 솟아나는 맑은 물', example: '산속 샘물을 한 모금 마셨습니다.', category: '자연' },
+  { word: '솔바람', meaning: '소나무 숲에서 부는 바람', example: '솔바람이 솔잎 사이로 살랑살랑 불었습니다.', category: '자연' },
+  { word: '숲정이', meaning: '마을 가까이에 있는 작은 숲', example: '숲정이에서 새들의 노랫소리를 들었습니다.', category: '자연' },
+  { word: '조각달', meaning: '조각처럼 가늘게 보이는 달', example: '밤하늘에 조각달이 떠올랐습니다.', category: '자연' },
+  { word: '초승달', meaning: '음력 초사흘 무렵의 가느다란 달', example: '초승달 옆에 별 하나가 반짝였습니다.', category: '자연' },
+  { word: '햇귀', meaning: '해가 처음 솟을 때의 빛', example: '햇귀가 어두운 마을을 환하게 밝혔습니다.', category: '자연' },
+  { word: '햇무리', meaning: '해 둘레에 둥글게 생기는 빛의 테', example: '하늘에 햇무리가 생겨 날씨를 살펴보았습니다.', category: '자연' },
+  { word: '흙내', meaning: '흙에서 나는 냄새', example: '비가 그친 뒤 촉촉한 흙내가 났습니다.', category: '자연' },
+  { word: '소슬바람', meaning: '가을에 쓸쓸하게 부는 바람', example: '소슬바람에 낙엽이 하나둘 떨어졌습니다.', category: '자연' },
+  { word: '마중물', meaning: '펌프에서 물을 끌어올리려고 먼저 붓는 물', example: '펌프에 마중물을 붓자 맑은 물이 나왔습니다.', category: '자연' },
+  { word: '가시버시', meaning: '부부를 다정하게 이르는 말', example: '가시버시가 나란히 한글 책을 읽었습니다.', category: '모임' },
+  { word: '길동무', meaning: '길을 함께 가는 친구', example: '친구가 즐거운 길동무가 되어 주었습니다.', category: '모임' },
+  { word: '나들이', meaning: '집을 떠나 가까운 곳에 다녀오는 일', example: '한글날에 가족과 박물관 나들이를 했습니다.', category: '모임' },
+  { word: '늦깎이', meaning: '나이가 들어서 어떤 일을 시작한 사람', example: '늦깎이 학생도 매일 한글을 익혔습니다.', category: '모임' },
+  { word: '말동무', meaning: '이야기를 나누는 친구', example: '책 속 주인공이 좋은 말동무가 되어 주었습니다.', category: '모임' },
+  { word: '벗', meaning: '가깝게 사귀는 친구', example: '오래된 벗과 우리말 이야기를 나누었습니다.', category: '모임' },
+  { word: '살붙이', meaning: '혈연으로 가까운 사람', example: '명절에 살붙이들이 한자리에 모였습니다.', category: '모임' },
+  { word: '새내기', meaning: '새로 들어온 사람', example: '새내기 친구에게 교실을 안내해 주었습니다.', category: '모임' },
+  { word: '오누이', meaning: '오빠와 누이처럼 남매 사이인 사람들', example: '오누이가 마주 앉아 동화책을 읽었습니다.', category: '모임' },
+  { word: '어울림', meaning: '여럿이 잘 어울리는 일이나 모습', example: '서로 다른 생각도 어울림 속에서 빛났습니다.', category: '모임' },
+  { word: '이웃사촌', meaning: '가까이 지내는 이웃을 사촌처럼 이르는 말', example: '이웃사촌과 함께 마을 잔치를 준비했습니다.', category: '모임' },
+  { word: '풋내기', meaning: '일이나 경험이 아직 서투른 사람', example: '풋내기라도 용기를 내어 발표했습니다.', category: '모임' },
+  { word: '한솥밥', meaning: '한집에서 함께 지내며 먹는 밥', example: '우리는 한솥밥을 먹는 식구처럼 서로 도왔습니다.', category: '모임' },
+  { word: '길라잡이', meaning: '길을 안내해 주는 사람이나 물건', example: '우리말 사전이 낯선 낱말의 길라잡이가 되었습니다.', category: '모임' },
+  { word: '도우미', meaning: '남이 하는 일을 곁에서 도와주는 사람', example: '도우미 친구가 책상 정리를 도왔습니다.', category: '모임' },
+  { word: '마실', meaning: '이웃에 놀러 다니는 일', example: '저녁에 이웃집으로 마실을 갔습니다.', category: '모임' },
+  { word: '살림살이', meaning: '집안의 생활이나 살림을 꾸리는 일', example: '살림살이를 아끼는 지혜를 배웠습니다.', category: '모임' },
+  { word: '쉼터', meaning: '잠시 쉬도록 마련한 곳', example: '도서관 한쪽에 작은 쉼터가 있습니다.', category: '모임' },
+  { word: '한마음', meaning: '여럿이 같은 마음을 가지는 일', example: '우리 반은 한마음으로 응원했습니다.', category: '모임' },
+  { word: '가엾다', meaning: '딱하고 불쌍한 마음이 들다', example: '비를 맞은 강아지가 가엾어 우산을 씌워 주었습니다.', category: '마음' },
+  { word: '갸륵하다', meaning: '마음이나 행동이 착하고 장하다', example: '동생을 챙기는 마음이 갸륵했습니다.', category: '마음' },
+  { word: '기껍다', meaning: '마음에 들어 기쁘고 만족스럽다', example: '친구의 도움을 받아 기꺼웠습니다.', category: '마음' },
+  { word: '도탑다', meaning: '서로의 관계가 깊고 정답다', example: '두 친구의 우정이 도타웠습니다.', category: '마음' },
+  { word: '무던하다', meaning: '성격이 너그럽고 까다롭지 않다', example: '무던한 친구는 누구와도 잘 지냈습니다.', category: '마음' },
+  { word: '벅차다', meaning: '감정이 가득하여 힘에 겹다', example: '한글날 무대에 서니 가슴이 벅찼습니다.', category: '마음' },
+  { word: '살갑다', meaning: '마음씨가 부드럽고 다정하다', example: '살가운 인사 한마디가 마음을 따뜻하게 했습니다.', category: '마음' },
+  { word: '수더분하다', meaning: '꾸밈이 없고 소박하며 편안하다', example: '수더분한 웃음이 보기 좋았습니다.', category: '마음' },
+  { word: '안쓰럽다', meaning: '여리고 힘들어 보여 마음이 아프다', example: '혼자 남은 친구가 안쓰러워 곁에 앉았습니다.', category: '마음' },
+  { word: '애틋하다', meaning: '마음이 간절하고 애잔하다', example: '고향을 생각하는 마음이 애틋했습니다.', category: '마음' },
+  { word: '올곧다', meaning: '마음이나 태도가 바르고 곧다', example: '올곧은 마음으로 약속을 지켰습니다.', category: '마음' },
+  { word: '의젓하다', meaning: '말과 행동이 점잖고 믿음직하다', example: '어려운 일에도 의젓하게 대처했습니다.', category: '마음' },
+  { word: '참하다', meaning: '모습이나 행동이 단정하고 얌전하다', example: '참한 글씨로 한글날 카드를 꾸몄습니다.', category: '모양' },
+  { word: '흐뭇하다', meaning: '마음에 흐뭇한 만족감이 있다', example: '친구들이 서로 돕는 모습이 흐뭇했습니다.', category: '마음' },
+  { word: '보드랍다', meaning: '살결이나 느낌이 부드럽다', example: '보드라운 수건으로 손을 닦았습니다.', category: '모양' },
+  { word: '싹싹하다', meaning: '성격이 밝고 붙임성이 좋다', example: '싹싹한 학생이 손님을 반갑게 맞았습니다.', category: '마음' },
+  { word: '찬찬하다', meaning: '성질이 차분하고 꼼꼼하다', example: '찬찬하게 글자를 한 자씩 살폈습니다.', category: '마음' },
+  { word: '풋풋하다', meaning: '싱그럽고 순수한 느낌이 있다', example: '아이들의 풋풋한 웃음이 운동장에 퍼졌습니다.', category: '느낌' },
+  { word: '어엿하다', meaning: '행동이나 모습이 의젓하고 번듯하다', example: '어엿한 한글 지킴이로 자라고 있습니다.', category: '모양' },
+  { word: '다소곳하다', meaning: '고개를 조금 숙이고 얌전하다', example: '아이가 다소곳하게 인사를 했습니다.', category: '모양' },
+  { word: '야무지다', meaning: '사람이나 일이 빈틈없이 단단하다', example: '야무지게 준비물을 챙겼습니다.', category: '마음' },
+  { word: '정답다', meaning: '따뜻하고 친근한 느낌이 있다', example: '정다운 우리말로 서로를 불렀습니다.', category: '마음' },
+  { word: '알뜰살뜰', meaning: '정성을 다해 빈틈없이 보살피는 모양', example: '친구들이 교실을 알뜰살뜰 가꾸었습니다.', category: '마음' },
+  { word: '오순도순', meaning: '여럿이 정답게 이야기하는 모양', example: '가족이 오순도순 둘러앉았습니다.', category: '말맛' },
+  { word: '아기자기', meaning: '작은 것들이 예쁘게 어울려 정답다', example: '아기자기한 글씨로 표지를 꾸몄습니다.', category: '모양' },
+  { word: '거닐다', meaning: '가까운 곳을 이리저리 천천히 걷다', example: '궁궐 뜰을 거닐며 옛글을 살펴보았습니다.', category: '움직임' },
+  { word: '굽이치다', meaning: '길이나 물줄기가 이리저리 휘어 흐르다', example: '강물이 들판 사이로 굽이쳤습니다.', category: '움직임' },
+  { word: '나부끼다', meaning: '얇은 천이나 잎이 바람에 흔들리다', example: '청팀 깃발이 힘차게 나부꼈습니다.', category: '움직임' },
+  { word: '다독이다', meaning: '가볍게 두드리거나 잘하도록 타이르다', example: '선생님이 긴장한 아이를 다독였습니다.', category: '움직임' },
+  { word: '도맡다', meaning: '어떤 일을 혼자 책임지고 맡다', example: '친구가 안내 방송을 도맡았습니다.', category: '움직임' },
+  { word: '뒤척이다', meaning: '몸을 이리저리 움직이며 잠을 이루지 못하다', example: '기대되는 경기 전날 밤 잠을 뒤척였습니다.', category: '움직임' },
+  { word: '들르다', meaning: '지나는 길에 잠깐 들어가 머무르다', example: '도서관에 들러 우리말 책을 빌렸습니다.', category: '움직임' },
+  { word: '머금다', meaning: '물이나 감정 등을 입이나 마음에 간직하다', example: '아이는 환한 미소를 머금었습니다.', category: '마음' },
+  { word: '무르익다', meaning: '과일이나 일이 충분히 익거나 발전하다', example: '가을이 무르익어 들판이 황금빛이 되었습니다.', category: '움직임' },
+  { word: '사무치다', meaning: '마음 깊이 느껴지다', example: '친구의 고마움이 마음에 사무쳤습니다.', category: '마음' },
+  { word: '서성이다', meaning: '한곳에 머물러 이리저리 천천히 걷다', example: '발표 순서를 기다리며 복도를 서성였습니다.', category: '움직임' },
+  { word: '스미다', meaning: '조금씩 배어들거나 마음에 느껴지다', example: '따뜻한 햇살이 창문으로 스며들었습니다.', category: '움직임' },
+  { word: '아우르다', meaning: '여럿을 한데 모아 하나로 묶다', example: '서로 다른 생각을 아우르는 문장을 만들었습니다.', category: '움직임' },
+  { word: '어루만지다', meaning: '손으로 부드럽게 쓰다듬다', example: '할머니가 손자의 머리를 어루만졌습니다.', category: '움직임' },
+  { word: '우러나다', meaning: '생각이나 느낌이 마음에서 저절로 생겨나다', example: '친구를 아끼는 마음이 우러났습니다.', category: '마음' },
+  { word: '움츠리다', meaning: '몸이나 마음을 오그라뜨리다', example: '찬바람에 어깨를 움츠렸습니다.', category: '움직임' },
+  { word: '재잘거리다', meaning: '작은 목소리로 즐겁게 자꾸 이야기하다', example: '아이들이 쉬는 시간에 재잘거렸습니다.', category: '말맛' },
+  { word: '주무르다', meaning: '손으로 이리저리 누르고 비비다', example: '반죽을 손으로 골고루 주물렀습니다.', category: '움직임' },
+  { word: '추스르다', meaning: '몸이나 마음을 가다듬어 바로잡다', example: '숨을 고르고 마음을 추슬렀습니다.', category: '움직임' },
+  { word: '헤아리다', meaning: '수를 세거나 마음을 깊이 생각하다', example: '친구의 마음을 헤아려 따뜻하게 말했습니다.', category: '마음' },
+  { word: '가꾸다', meaning: '좋은 상태가 되도록 보살피고 꾸미다', example: '우리말 정원을 함께 가꾸었습니다.', category: '움직임' },
+  { word: '기웃거리다', meaning: '무엇을 보려고 고개나 몸을 자꾸 기울이다', example: '아이들이 전시 작품을 기웃거리며 살펴보았습니다.', category: '움직임' },
+  { word: '내디디다', meaning: '발을 앞으로 내놓다', example: '새로운 배움에 첫발을 내디뎠습니다.', category: '움직임' },
+  { word: '노닐다', meaning: '한가롭게 이리저리 다니며 즐기다', example: '나비가 꽃밭에서 노닐었습니다.', category: '움직임' },
+  { word: '다지다', meaning: '마음이나 뜻을 굳게 정하다', example: '오늘은 정확하게 치겠다고 마음을 다졌습니다.', category: '마음' },
+  { word: '되새기다', meaning: '지난 일을 다시 생각하거나 되풀이해 익히다', example: '훈민정음의 뜻을 여러 번 되새겼습니다.', category: '움직임' },
+  { word: '살피다', meaning: '자세히 보고 살펴 알아보다', example: '문장의 띄어쓰기를 꼼꼼히 살폈습니다.', category: '움직임' },
+  { word: '스치다', meaning: '가볍게 닿거나 지나가다', example: '산들바람이 뺨을 스쳤습니다.', category: '움직임' },
+  { word: '일구다', meaning: '밭을 갈아 만들거나 보람 있는 일을 이루다', example: '친구들과 힘을 모아 멋진 결과를 일구었습니다.', category: '움직임' },
+  { word: '타이르다', meaning: '잘 알아듣도록 차분히 일러 주다', example: '선생님이 바른 말의 소중함을 타일렀습니다.', category: '움직임' },
+  { word: '헤매다', meaning: '갈 곳을 몰라 이리저리 돌아다니다', example: '낯선 낱말 뜻을 찾느라 사전을 헤맸습니다.', category: '움직임' },
+  { word: '가마솥', meaning: '쇠로 만든 크고 둥근 솥', example: '가마솥에서 따뜻한 국 냄새가 났습니다.', category: '문화' },
+  { word: '구들', meaning: '방바닥 밑으로 불기운이 지나가게 만든 난방 시설', example: '옛 한옥의 구들이 방을 따뜻하게 했습니다.', category: '문화' },
+  { word: '나막신', meaning: '나무로 만든 신', example: '박물관에서 옛 나막신을 보았습니다.', category: '문화' },
+  { word: '너와집', meaning: '나무 조각을 지붕에 얹은 집', example: '산골의 너와집이 고즈넉하게 서 있었습니다.', category: '문화' },
+  { word: '도리깨', meaning: '곡식의 이삭을 두드려 알곡을 떠는 농기구', example: '농부가 도리깨로 곡식을 털었습니다.', category: '문화' },
+  { word: '두레박', meaning: '우물에서 물을 퍼 올리는 바가지', example: '두레박으로 우물물을 길었습니다.', category: '문화' },
+  { word: '디딜방아', meaning: '발로 디뎌 곡식을 찧는 방아', example: '전통 마을에서 디딜방아를 체험했습니다.', category: '문화' },
+  { word: '멍석', meaning: '곡식이나 물건을 펴 놓는 큰 깔개', example: '마당에 멍석을 펴고 이야기를 나누었습니다.', category: '문화' },
+  { word: '모시', meaning: '모시풀의 껍질로 짠 여름 옷감', example: '모시로 만든 시원한 옷을 구경했습니다.', category: '문화' },
+  { word: '보자기', meaning: '물건을 싸거나 덮는 네모난 천', example: '선물을 예쁜 보자기에 싸 보았습니다.', category: '문화' },
+  { word: '삿갓', meaning: '비나 햇볕을 가리려고 쓰는 갓', example: '농부 인형이 삿갓을 쓰고 있었습니다.', category: '문화' },
+  { word: '섬돌', meaning: '집 앞에 오르내리도록 놓은 돌계단', example: '섬돌에 앉아 신발끈을 고쳤습니다.', category: '문화' },
+  { word: '소쿠리', meaning: '대나무나 싸리로 엮은 작은 바구니', example: '소쿠리에 주운 밤을 담았습니다.', category: '문화' },
+  { word: '시루', meaning: '떡이나 음식을 찌는 그릇', example: '시루에서 김이 모락모락 올랐습니다.', category: '문화' },
+  { word: '아궁이', meaning: '불을 지피는 구멍이나 부엌의 시설', example: '아궁이에 장작불이 활활 타올랐습니다.', category: '문화' },
+  { word: '옹기', meaning: '흙으로 빚어 구운 그릇', example: '장독대에 여러 옹기가 놓여 있었습니다.', category: '문화' },
+  { word: '자배기', meaning: '아가리가 넓고 둥근 질그릇', example: '자배기에 빨래를 담아 날랐습니다.', category: '문화' },
+  { word: '장독대', meaning: '간장이나 된장 항아리를 놓아두는 곳', example: '햇볕 좋은 장독대에서 장이 익어 갔습니다.', category: '문화' },
+  { word: '지게', meaning: '짐을 등에 지도록 만든 운반 도구', example: '나무꾼이 지게에 땔감을 실었습니다.', category: '문화' },
+  { word: '키', meaning: '곡식의 쭉정이나 티를 날려 고르는 도구', example: '키질로 곡식과 쭉정이를 가려냈습니다.', category: '문화' },
+  { word: '함지박', meaning: '통나무를 파서 만든 큰 그릇', example: '함지박에 시원한 물을 받아 두었습니다.', category: '문화' },
+  { word: '고누', meaning: '말판에 말을 놓고 겨루는 옛놀이', example: '친구와 고누를 두며 옛놀이를 배웠습니다.', category: '문화' },
+  { word: '두런두런', meaning: '여럿이 나지막한 목소리로 이야기하는 소리', example: '아이들이 두런두런 책 이야기를 나누었습니다.', category: '말맛' },
+  { word: '살금살금', meaning: '남이 알아차리지 못하게 조심조심 움직이는 모양', example: '고양이가 살금살금 다가왔습니다.', category: '움직임' },
+  { word: '아장아장', meaning: '어린아이가 작은 걸음으로 걷는 모양', example: '아기가 아장아장 걸어왔습니다.', category: '움직임' },
+  { word: '어기적어기적', meaning: '팔다리를 부자연스럽게 움직이며 걷는 모양', example: '오리가 어기적어기적 연못으로 갔습니다.', category: '움직임' },
+  { word: '우물우물', meaning: '음식을 입 안에 넣고 천천히 씹는 모양', example: '아이들이 간식을 우물우물 먹었습니다.', category: '움직임' },
+  { word: '주렁주렁', meaning: '열매나 물건이 많이 매달린 모양', example: '감나무에 감이 주렁주렁 열렸습니다.', category: '모양' },
+  { word: '찰랑찰랑', meaning: '물이나 액체가 가볍게 흔들리는 모양', example: '잔에 담긴 물이 찰랑찰랑 흔들렸습니다.', category: '모양' },
+  { word: '포르르', meaning: '작은 새나 나비가 가볍게 날아오르는 모양', example: '참새가 포르르 날아갔습니다.', category: '움직임' },
+  { word: '후다닥', meaning: '매우 빠르게 뛰거나 일을 해치우는 모양', example: '종이 울리자 모두 후다닥 자리에 앉았습니다.', category: '움직임' },
+  { word: '깡충깡충', meaning: '짧은 다리로 자꾸 뛰는 모양', example: '토끼가 들판을 깡충깡충 뛰었습니다.', category: '움직임' },
+  { word: '뚜벅뚜벅', meaning: '발을 힘주어 걸을 때 나는 소리나 모양', example: '친구가 뚜벅뚜벅 교실로 들어왔습니다.', category: '말맛' },
+  { word: '보글보글', meaning: '물이 끓거나 거품이 잇따라 올라오는 모양', example: '냄비에서 국물이 보글보글 끓었습니다.', category: '모양' },
+  { word: '오목조목', meaning: '작은 것들이 옹기종기 모여 있는 모양', example: '오목조목한 마을 풍경을 그렸습니다.', category: '모양' },
+  { word: '올망졸망', meaning: '작은 것들이 고르지 않게 많이 모인 모양', example: '아이들이 올망졸망 모여 앉았습니다.', category: '모양' },
+  { word: '차곡차곡', meaning: '물건을 가지런히 겹쳐 쌓는 모양', example: '책을 차곡차곡 책장에 꽂았습니다.', category: '모양' },
+  { word: '해죽해죽', meaning: '만족스러운 듯 입을 조금 벌리고 자꾸 웃는 모양', example: '아이들이 선물을 받고 해죽해죽 웃었습니다.', category: '움직임' },
+  { word: '화들짝', meaning: '갑자기 놀라 몸을 크게 움직이는 모양', example: '문이 열리자 모두 화들짝 놀랐습니다.', category: '움직임' },
+  { word: '보송보송', meaning: '살결이나 물건이 마르고 부드러운 모양', example: '햇볕에 말린 수건이 보송보송했습니다.', category: '모양' },
+  { word: '말랑말랑', meaning: '물체가 부드럽고 말랑한 느낌', example: '새로 만든 찰흙이 말랑말랑했습니다.', category: '느낌' },
+  { word: '새콤달콤', meaning: '신맛과 단맛이 함께 나는 맛', example: '새콤달콤한 과일을 나누어 먹었습니다.', category: '느낌' },
+];
+
+const WORD_PROMPTS = [...BASE_WORD_PROMPTS, ...ADDITIONAL_WORD_PROMPTS];
+
 const WORD_QUIZ_PROMPTS = WORD_PROMPTS.map((prompt, index) => ({
   category: '순우리말',
   meaning: prompt.meaning,
@@ -167,22 +319,51 @@ function shuffledIndexes(length, avoidFirst) {
   return order;
 }
 
+function shuffledWordIndexes(length, avoidFirst) {
+  const groups = new Map();
+  for (let index = 0; index < length; index += 1) {
+    const category = WORD_PROMPTS[index]?.category || '기타';
+    if (!groups.has(category)) groups.set(category, []);
+    groups.get(category).push(index);
+  }
+
+  const categories = [...groups.keys()];
+  const categoryOrder = shuffledIndexes(categories.length, -1).map((index) => categories[index]);
+  const order = [];
+  while (order.length < length) {
+    for (const category of categoryOrder) {
+      const group = groups.get(category);
+      if (!group?.length) continue;
+      const pick = Math.floor(Math.random() * group.length);
+      order.push(group.splice(pick, 1)[0]);
+    }
+  }
+
+  if (length > 1 && order[0] === avoidFirst) [order[0], order[1]] = [order[1], order[0]];
+  return order;
+}
+
 // Each player walks a private shuffled deck that is reshuffled every lap, so
 // rounds and players do not all see the same fixed sequence.
-function deckIndex(progress, key, length, position) {
+function deckIndex(progress, key, length, position, makeOrder = shuffledIndexes) {
   progress.decks ??= {};
   const lap = Math.floor(position / length);
   let deck = progress.decks[key];
   if (!deck || deck.lap !== lap) {
-    deck = { lap, order: shuffledIndexes(length, deck?.order[length - 1]) };
+    deck = { lap, order: makeOrder(length, deck?.order[length - 1]) };
     progress.decks[key] = deck;
   }
   return deck.order[position % length];
 }
 
-function currentWordPrompt(progress) {
-  const index = deckIndex(progress, 'word', WORD_PROMPTS.length, progress.promptIndex);
+function currentWordPrompt(progress, key = 'word') {
+  const index = deckIndex(progress, key, WORD_PROMPTS.length, progress.promptIndex, shuffledWordIndexes);
   return { id: `word-${progress.promptIndex}-${index}`, prompt: WORD_PROMPTS[index] };
+}
+
+function currentPracticePrompt(progress) {
+  const { id, prompt } = currentWordPrompt(progress, 'practice');
+  return { id: `practice-${id}`, prompt };
 }
 
 // Every third quiz question is about Hangul's creation so the large word pool
@@ -487,6 +668,17 @@ function getMode(room) {
 
 function getPromptFor(room, player) {
   const game = room.game;
+  if (game.phase === 'lobby' && player?.progress) {
+    const { id, prompt } = currentPracticePrompt(player.progress);
+    return {
+      kind: 'practice',
+      id,
+      word: prompt.word,
+      category: prompt.category,
+      meaning: prompt.meaning,
+      example: prompt.example,
+    };
+  }
   if (game.phase === 'placement' && player?.progress) {
     const { id, sentence } = currentPlacementPrompt(player.progress);
     return { kind: 'placement', id, sentence };
@@ -544,7 +736,9 @@ function publicStateFor(room, player) {
     phase: game.phase,
     roundIndex: game.roundIndex,
     roundNumber: game.roundIndex + 1,
-    totalRounds: game.roundIndex === MODES.length || game.wheelSelectedIndex !== null ? MODES.length + 1 : MODES.length,
+    // The fifth slot is always part of the match plan. It becomes active only
+    // when rounds 1–4 finish 2:2 and the wheel selects a rematch mode.
+    totalRounds: MODES.length + 1,
     mode: mode ? { ...mode } : null,
     timeRemainingMs: game.phase === 'round' ? Math.max(0, game.roundEndsAt - Date.now()) : 0,
     intermissionRemainingMs: game.phase === 'intermission' ? Math.max(0, game.intermissionUntil - Date.now()) : 0,
@@ -577,6 +771,7 @@ function publicStateFor(room, player) {
       isHost: player.isHost,
       spectator: player.spectator,
       // Typing results stay private to each player; others only see teams.
+      practiceCount: player.practiceCount || 0,
       placementKeystrokes: player.placementKeystrokes || 0,
       typingSpeed: player.typingSpeed ?? null,
     } : null,
@@ -855,9 +1050,32 @@ function finishPlacement(room) {
     counts[player.team] += 1;
     return counts;
   }, { blue: 0, white: 0 });
-  game.phase = 'teamReveal';
-  game.teamRevealUntil = Date.now() + TEAM_REVEAL_MS;
-  game.notice = '타자 실력이 비슷하도록 팀을 나눴어요!';
+  // Team assignment is automatic, so do not hold the class on a separate
+  // reveal screen. The first round begins as soon as the 30-second test ends.
+  game.notice = '타자 실력이 비슷하도록 팀을 나눴어요! 1라운드를 시작합니다.';
+  beginRound(room, 0);
+}
+
+function handlePracticeAnswer(room, player, answer) {
+  const game = room.game;
+  if (game.phase !== 'lobby' || !player.progress || !normalizeSentence(answer)) return;
+  const { prompt } = currentPracticePrompt(player.progress);
+  const elapsedMs = Date.now() - player.progress.promptStartedAt;
+  const result = calculateTypedScore(answer, prompt.word, elapsedMs, 'word');
+  player.practiceCount = (player.practiceCount || 0) + 1;
+  player.progress.promptIndex += 1;
+  player.progress.promptStartedAt = Date.now();
+  send(player.ws, {
+    type: 'practiceResult',
+    correct: result.exact,
+    word: prompt.word,
+    meaning: prompt.meaning,
+    example: prompt.example,
+    category: prompt.category,
+    keystrokes: result.correctChars,
+    cpm: result.cpm,
+    practiceCount: player.practiceCount,
+  });
   broadcast(room);
 }
 
@@ -865,6 +1083,7 @@ function handleTypedAnswer(player, answer) {
   const room = getRoomForPlayer(player);
   if (!room) return;
   const game = room.game;
+  if (game.phase === 'lobby') return handlePracticeAnswer(room, player, answer);
   if (game.phase === 'placement') return handlePlacementAnswer(room, player, answer);
   if (game.phase !== 'round' || !player.progress || !getMode(room)) return;
   if (Date.now() >= game.roundEndsAt) return finishRound(room);
@@ -979,7 +1198,8 @@ function resetToLobby(player) {
   room.game = createGame();
   for (const entry of room.players.values()) {
     entry.spectator = false;
-    entry.progress = { promptIndex: 0, promptStartedAt: 0 };
+    entry.progress = { promptIndex: 0, promptStartedAt: Date.now() };
+    entry.practiceCount = 0;
   }
   broadcast(room);
 }
@@ -1024,7 +1244,8 @@ function joinPlayer(ws, message) {
     characterId: sanitizeCharacter(message.characterId),
     isHost: room.players.size === 0,
     spectator: false,
-    progress: { promptIndex: 0, promptStartedAt: 0 },
+    progress: { promptIndex: 0, promptStartedAt: Date.now() },
+    practiceCount: 0,
   };
   room.players.set(player.id, player);
   socketRooms.set(ws, roomId);

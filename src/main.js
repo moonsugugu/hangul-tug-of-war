@@ -166,6 +166,20 @@ function connect() {
       renderResultToast();
       return;
     }
+    if (message.type === 'practiceResult') {
+      state.result = {
+        correct: message.correct,
+        score: message.keystrokes,
+        unit: '타',
+        title: message.correct ? '연습 성공!' : '다음 낱말도 연습해 봐요',
+        meaning: message.meaning,
+        example: message.example,
+        answer: message.word,
+      };
+      state.draft = '';
+      renderResultToast();
+      return;
+    }
     if (message.type === 'relayAnswerResult') {
       state.result = { correct: message.correct, score: message.correct ? 100 : 0 };
       renderResultToast();
@@ -279,7 +293,7 @@ function restartGame() {
 
 function submitAnswer() {
   const prompt = state.data?.prompt;
-  if (!prompt || !['word', 'repair', 'placement'].includes(prompt.kind)) return;
+  if (!prompt || !['word', 'repair', 'placement', 'practice'].includes(prompt.kind)) return;
   const answer = document.querySelector('#answer-input')?.value ?? state.draft;
   if (!answer.trim()) return;
   send({ type: 'answer', answer });
@@ -445,11 +459,12 @@ function renderLobby() {
         <div>
           <div class="section-kicker">WAITING ROOM</div>
           <h1>모두 모이면 시작해요</h1>
-          <p class="muted">현재 ${players.length}/${data?.maxPlayers || 30}명 · 시작하면 먼저 타자 실력을 재고, 실력이 비슷하도록 청팀과 백팀을 나눠요.</p>
+          <p class="muted">현재 ${players.length}/${data?.maxPlayers || 30}명 · 시작 전에는 우리말 타자로 자유롭게 연습하고, 방장이 시작하면 30초 실력 판정 뒤 자동으로 팀을 나눠요.</p>
         </div>
         ${isHost ? '<button id="start-button" class="primary-button compact">게임 시작 <span>→</span></button>' : '<span class="waiting-pill"><i></i> 진행자를 기다리는 중</span>'}
       </div>
       ${renderRoomShare()}
+      <div id="practice-root">${renderPracticeCard(data)}</div>
       <article class="team-lobby-card lobby-roster">
         <div class="team-card-top"><span class="team-badge">모</span><span>참가자</span><strong>${players.length}명</strong></div>
         <div class="player-chips">${players.map((player) => {
@@ -460,7 +475,7 @@ function renderLobby() {
       </article>
       <div class="how-to panel-card">
         <div><span class="how-icon">✦</span><strong>게임 규칙</strong></div>
-        <p>시작하면 <b>30초 동안 문장을 입력해 타자 실력을 재요.</b> 실력에 맞춰 팀을 나눈 뒤 1라운드를 시작하고, 인원이 적은 팀에는 인원수 비율만큼 보정 점수가 적용돼요.</p>
+        <p>위 연습은 점수에 반영되지 않아요. 방장이 시작하면 <b>30초 동안 문장을 입력해 타자 실력을 재고</b>, 팀을 자동으로 나눈 뒤 1라운드를 바로 시작해요. 인원이 적은 팀에는 인원수 비율만큼 보정 점수가 적용돼요.</p>
       </div>
     </section>
   `;
@@ -487,14 +502,43 @@ function renderPlacementCard(data) {
   `;
 }
 
+function renderPracticeCard(data) {
+  const prompt = data?.prompt;
+  if (!prompt?.word) {
+    return '<section class="practice-card panel-card"><p class="muted">연습 낱말을 준비하고 있어요…</p></section>';
+  }
+  return `
+    <section class="practice-card panel-card">
+      <div class="practice-card__head">
+        <div>
+          <div class="section-kicker">OPEN PRACTICE · 자유 연습</div>
+          <h2>선생님이 시작하기 전, 우리말을 연습해요</h2>
+          <p class="muted">뜻을 살펴보고 낱말을 입력해 보세요. 연습 기록은 실력 판정과 팀 점수에 반영되지 않아요.</p>
+        </div>
+        <span class="practice-count">연습 ${formatScore(data.self?.practiceCount)}회</span>
+      </div>
+      <div class="practice-target">
+        <div class="prompt-meta"><span class="round-badge">우리말 연습</span><span class="category-badge">${escapeHtml(prompt.category || '순우리말')}</span></div>
+        <strong>${escapeHtml(prompt.word)}</strong>
+        <p>${escapeHtml(prompt.meaning || '')}</p>
+        ${prompt.example ? `<small>예문 · ${escapeHtml(prompt.example)}</small>` : ''}
+      </div>
+      <form id="answer-form" class="answer-form"><input id="answer-input" class="answer-input" autocomplete="off" spellcheck="false" placeholder="낱말을 그대로 입력해 보세요" /><button class="submit-button">연습 입력 <span>↵</span></button></form>
+      <p class="prompt-note">정확히 입력하면 다음 순우리말로 넘어가요.</p>
+    </section>
+  `;
+}
+
 function renderPromptOnly() {
-  const root = document.querySelector('#prompt-root');
   const data = state.data;
+  const root = document.querySelector(data?.phase === 'lobby' ? '#practice-root' : '#prompt-root');
   if (!root || !data) {
     render();
     return;
   }
-  root.innerHTML = data.phase === 'placement' ? renderPlacementCard(data) : renderPrompt(data);
+  root.innerHTML = data.phase === 'lobby'
+    ? renderPracticeCard(data)
+    : data.phase === 'placement' ? renderPlacementCard(data) : renderPrompt(data);
   bindPromptEvents(root);
   updateDynamic();
 }
@@ -672,13 +716,15 @@ function renderPrompt(data) {
 
 function renderGame() {
   const data = state.data;
+  const finalRoundActive = data.roundIndex === 4 || data.phase === 'wheel';
+  const finalRoundPending = !finalRoundActive && data.roundIndex < 4;
   return `
     <section class="game-page">
       <div class="game-heading"><div><div class="section-kicker">HANGUL DAY MATCH · ${data.roundNumber === 5 ? '결승 5라운드' : `${Math.max(1, data.roundNumber)}라운드`}</div><h1>${escapeHtml(data.mode?.name || '말모이 줄다리기')}</h1><p>${escapeHtml(data.mode?.description || '한글의 힘으로 줄을 당겨요.')}</p></div>${data.self ? `<div class="my-team-chip my-team-chip--${data.self.team}"><span>${data.self.team === 'blue' ? '청' : '백'}</span><div><small>${escapeHtml(data.self.name)}</small><strong>나는 ${teamName(data.self.team)}</strong></div></div>` : '<div class="live-pill"><i></i> LIVE SERVER</div>'}</div>
       ${renderScoreboard(data)}
       ${renderArena(data)}
       <div id="prompt-root">${renderPrompt(data)}</div>
-      <div class="round-strip">${roundModes.map((mode, index) => `<span class="round-chip ${index === data.roundIndex ? 'is-active' : index < data.roundIndex ? 'is-done' : ''}"><b>${index + 1}</b>${modeLabels[mode.id]}${data.roundScores?.[index] ? ` · ${teamName(data.roundScores[index].winner)} 승` : ''}</span>`).join('')}${data.totalRounds === 5 ? `<span class="round-chip ${data.roundIndex === 4 ? 'is-active' : ''}"><b>5</b>돌림판 결승</span>` : ''}</div>
+      <div class="round-strip">${roundModes.map((mode, index) => `<span class="round-chip ${index === data.roundIndex ? 'is-active' : index < data.roundIndex ? 'is-done' : ''}"><b>${index + 1}</b>${modeLabels[mode.id]}${data.roundScores?.[index] ? ` · ${teamName(data.roundScores[index].winner)} 승` : ''}</span>`).join('')}<span class="round-chip round-chip--final ${finalRoundActive ? 'is-active' : ''} ${finalRoundPending ? 'is-optional' : ''}" title="1~4라운드가 2:2로 끝나면 열립니다"><b>5</b>돌림판 결승${finalRoundPending ? ' · 2:2일 때' : ''}</span></div>
     </section>
   `;
 }
@@ -755,7 +801,8 @@ function bindPromptEvents(root) {
     // During the typing test, a perfectly typed sentence advances on its own
     // so children who forget Enter are not undercounted.
     const prompt = state.data?.prompt;
-    if (prompt?.kind === 'placement' && !event.isComposing && event.target.value.trim() === prompt.sentence) submitAnswer();
+    const expected = prompt?.kind === 'practice' ? prompt.word : prompt?.kind === 'placement' ? prompt.sentence : '';
+    if (expected && !event.isComposing && event.target.value.trim() === expected) submitAnswer();
   });
   root.querySelector('#answer-input')?.focus();
 }
