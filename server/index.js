@@ -186,7 +186,6 @@ const MIME_TYPES = {
 
 const rooms = new Map();
 const socketRooms = new Map();
-let lastBroadcastAt = 0;
 
 function createGame() {
   return {
@@ -235,13 +234,18 @@ function normalizeRoomId(value) {
   return String(value || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 6);
 }
 
+// networkInterfaces() 는 Windows 에서 1회 수십 ms 가 걸린다. 상태를 보낼 때마다(플레이어 수 × 0.5초마다)
+// 부르면 30명 방에서 서버가 밀려 입장이 15명 안팎에서 멈췄다. 1분 동안 결과를 기억해 둔다.
+let lanAddressCache = { value: '', at: 0 };
 function getLanAddress() {
-  const interfaces = networkInterfaces();
-  for (const entries of Object.values(interfaces)) {
+  if (lanAddressCache.value && Date.now() - lanAddressCache.at < 60_000) return lanAddressCache.value;
+  let found = '127.0.0.1';
+  for (const entries of Object.values(networkInterfaces())) {
     const address = entries?.find((entry) => !entry.internal && (entry.family === 'IPv4' || entry.family === 4));
-    if (address?.address) return address.address;
+    if (address?.address) { found = address.address; break; }
   }
-  return '127.0.0.1';
+  lanAddressCache = { value: found, at: Date.now() };
+  return found;
 }
 
 function getRoomUrl(roomId) {
@@ -431,7 +435,9 @@ function broadcast(room) {
   for (const player of room.players.values()) {
     send(player.ws, publicStateFor(room, player));
   }
-  lastBroadcastAt = Date.now();
+  // 방마다 따로 기록한다. 전역 하나로 두면 한 반에서 답이 들어올 때마다 시각이 갱신돼
+  // 다른 반들의 0.5초 정기 갱신이 계속 밀린다(20개 반 동시 사용 시 최장 4초 멈춤 실측).
+  room.lastBroadcastAt = Date.now();
 }
 
 function setNotice(room, text) {
@@ -847,8 +853,8 @@ function tick() {
     }
   }
 
-  if (now - lastBroadcastAt >= 500) {
-    for (const room of rooms.values()) broadcast(room);
+  for (const room of rooms.values()) {
+    if (now - (room.lastBroadcastAt || 0) >= 500) broadcast(room);
   }
 }
 
@@ -895,7 +901,14 @@ const httpServer = createServer((req, res) => {
   });
 });
 
-const websocketServer = new WebSocketServer({ server: httpServer, path: '/ws' });
+// 상태 메시지(약 15KB JSON)를 0.5초마다 전원에게 보내므로 압축 효과가 크다.
+// 20개 반 600명 실측: 전송량 161Mbps → 3Mbps. 대신 서버 CPU 약 2배, 메모리 약 +330MB.
+// 브라우저는 permessage-deflate 를 기본 지원해 클라이언트 수정이 필요 없다. WS_COMPRESS=0 으로 끌 수 있다.
+const websocketServer = new WebSocketServer({
+  server: httpServer,
+  path: '/ws',
+  perMessageDeflate: process.env.WS_COMPRESS === '0' ? false : { zlibDeflateOptions: { level: 3 }, threshold: 1024 },
+});
 websocketServer.on('connection', (ws) => {
   ws.on('message', (message) => handleMessage(ws, message));
   ws.on('close', () => {
