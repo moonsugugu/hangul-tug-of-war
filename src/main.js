@@ -70,7 +70,7 @@ const modeLabels = {
 
 const roundGuides = {
   word: '화면에 나온 순우리말을 정확히 입력하세요. 정확하고 빠를수록 줄을 더 당깁니다.',
-  quiz: '뜻을 읽고 알맞은 낱말이나 한글 창제 정답을 고르세요.',
+  quiz: '네 가지 보기 중 정답을 고르세요. 오답이면 우리 팀 점수가 30점 깎이니 신중하게 골라 주세요!',
   repair: '잘못 붙은 문장을 올바르게 띄어 써서 입력하세요.',
   relay: '대표가 정답을 맞히면 줄이 2칸 움직여요. 친구들은 같은 문장을 입력해 1점씩 보태고, 제한시간까지 대표가 계속 바뀝니다.',
 };
@@ -193,7 +193,9 @@ function connect() {
       return;
     }
     if (message.type === 'answerResult' || message.type === 'choiceResult') {
-      state.result = message;
+      state.result = message.type === 'choiceResult' && !message.correct
+        ? { ...message, title: '오답! 우리 팀 점수 30점 감점' }
+        : message;
       state.draft = '';
       renderResultToast();
       return;
@@ -429,7 +431,7 @@ function renderHeader() {
       <a class="brand-mark" href="/" aria-label="말모이 줄다리기 홈">
         <span class="brand-mark__seal">한</span>
         <span>
-          <span class="brand-mark__title"><strong>말모이 줄다리기</strong><span class="brand-mark__version">ver.1.0.3</span></span>
+          <span class="brand-mark__title"><strong>말모이 줄다리기</strong><span class="brand-mark__version">ver.1.0.4</span></span>
           <small>한글날 기념 타자 대전</small>
         </span>
       </a>
@@ -767,11 +769,11 @@ function renderPrompt(data) {
   if (prompt.kind === 'quiz') {
     return `
       <section class="prompt-card prompt-card--quiz">
-        <div class="prompt-meta"><span class="round-badge">ROUND ${data.roundNumber}</span><span class="category-badge ${prompt.category === '한글 창제' ? 'category-badge--history' : ''}">${escapeHtml(prompt.category || '뜻풀이')}</span><span class="prompt-help">${prompt.category === '한글 창제' ? '한글 창제 이야기를 떠올려 골라 주세요' : '이 뜻에 맞는 단어를 골라 주세요'}</span></div>
-        ${prompt.category === '한글 창제' ? '<div class="history-ribbon">훈민정음 배움 카드 · 세종대왕과 한글 창제</div>' : ''}
+        <div class="prompt-meta"><span class="round-badge">ROUND ${data.roundNumber}</span><span class="category-badge ${prompt.category === '순우리말' ? '' : 'category-badge--history'}">${escapeHtml(prompt.category || '뜻풀이')}</span><span class="prompt-help">${prompt.category === '순우리말' ? '이 뜻에 맞는 순우리말을 골라 주세요' : '한글 창제 원리와 세종대왕의 기록을 떠올려 골라 주세요'}</span></div>
+        ${prompt.category !== '순우리말' ? '<div class="history-ribbon">한글과 세종대왕 배움 카드</div>' : ''}
         <div class="meaning-question">${escapeHtml(prompt.meaning)}</div>
         <div class="choice-grid">${prompt.choices.map((choice, index) => `<button class="choice-button" data-choice="${escapeHtml(choice)}"><span>${String.fromCharCode(9312 + index)}</span>${escapeHtml(choice)}</button>`).join('')}</div>
-        <p class="prompt-note">빠르고 정확하게 고르면 줄을 더 크게 당겨요.</p>
+        <p class="prompt-note">정답은 점수를 얻고, 오답은 우리 팀 점수 30점 감점!</p>
       </section>
     `;
   }

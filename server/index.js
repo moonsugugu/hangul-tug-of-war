@@ -13,6 +13,7 @@ const PORT = Number(process.env.PORT || 8787);
 const PUBLIC_BASE_URL = String(process.env.PUBLIC_BASE_URL || '').replace(/\/+$/, '');
 const REFERENCE_CPM = 120;
 const RELAY_LIMIT_MS = 12_000;
+const QUIZ_WRONG_PENALTY = 30;
 const RELAY_DUEL_PAUSE_MS = Number(process.env.RELAY_DUEL_PAUSE_MS ?? 1_800);
 const ROUND_MULTIPLIERS = [1, 1.1, 1.3, 1.5, 1.5];
 const ROUND_DURATION_MS = Number(process.env.ROUND_DURATION_MS || 180_000);
@@ -294,22 +295,45 @@ const WORD_PROMPTS = [...BASE_WORD_PROMPTS, ...ADDITIONAL_WORD_PROMPTS];
 const WORD_QUIZ_PROMPTS = WORD_PROMPTS.map((prompt, index) => ({
   category: '순우리말',
   meaning: prompt.meaning,
-  choices: [prompt.word, WORD_PROMPTS[(index + 7) % WORD_PROMPTS.length].word, WORD_PROMPTS[(index + 15) % WORD_PROMPTS.length].word],
+  choices: [0, 7, 15, 23].map((offset) => WORD_PROMPTS[(index + offset) % WORD_PROMPTS.length].word),
   answer: prompt.word,
   explanation: `${prompt.word}은(는) ‘${prompt.meaning}’이라는 뜻이에요.`,
 }));
 
+function quizPrompt(category, meaning, answer, distractors, explanation) {
+  return { category, meaning, choices: [answer, ...distractors], answer, explanation };
+}
+
 const HANGUL_CREATION_QUIZ_PROMPTS = [
-  { category: '한글 창제', meaning: '훈민정음이 세상에 반포된 해는 언제일까요?', choices: ['1443년', '1446년', '1592년'], answer: '1446년', explanation: '훈민정음은 1443년에 완성되고 1446년에 반포되었습니다.' },
-  { category: '한글 창제', meaning: '세종대왕이 훈민정음을 만든 가장 큰 뜻은 무엇일까요?', choices: ['백성이 쉽게 읽고 쓰도록 돕기 위해', '궁궐 장식을 만들기 위해', '외국어를 없애기 위해'], answer: '백성이 쉽게 읽고 쓰도록 돕기 위해', explanation: '세종대왕은 백성이 자신의 생각을 쉽게 표현할 수 있기를 바랐습니다.' },
-  { category: '한글 창제', meaning: '훈민정음은 한글의 처음 이름입니다. 맞는 설명은 무엇일까요?', choices: ['백성을 가르치는 바른 소리', '나라를 지키는 큰 노래', '세상을 밝히는 별빛'], answer: '백성을 가르치는 바른 소리', explanation: '훈민정음은 ‘백성을 가르치는 바른 소리’라는 뜻입니다.' },
-  { category: '한글 창제', meaning: '한글날은 언제일까요?', choices: ['3월 1일', '10월 9일', '12월 25일'], answer: '10월 9일', explanation: '10월 9일은 한글날로, 훈민정음 반포를 기념합니다.' },
-  { category: '한글 창제', meaning: '훈민정음 해례본이 알려 주는 내용은 무엇일까요?', choices: ['창제 원리와 사용 방법', '조선의 음식 조리법', '궁궐의 건축 설계도'], answer: '창제 원리와 사용 방법', explanation: '해례본에는 훈민정음의 원리와 글자를 쓰는 방법이 설명되어 있습니다.' },
-  { category: '한글 창제', meaning: '훈민정음의 자음은 무엇을 본떠 만들었을까요?', choices: ['발음할 때의 입과 목 등의 모양', '밤하늘의 별자리', '궁궐의 문양'], answer: '발음할 때의 입과 목 등의 모양', explanation: '기본 자음은 소리를 낼 때의 발음 기관 모양을 본떠 만들었습니다.' },
-  { category: '한글 창제', meaning: '훈민정음의 기본 모음이 바탕으로 삼은 것은 무엇일까요?', choices: ['천·지·인', '봄·여름·가을', '산·강·바다'], answer: '천·지·인', explanation: '기본 모음은 하늘, 땅, 사람을 뜻하는 천·지·인을 바탕으로 만들었습니다.' },
-  { category: '한글 창제', meaning: '한글의 가장 큰 장점으로 알맞은 것은 무엇일까요?', choices: ['소리와 글자의 관계를 이해하기 쉽다', '오직 왕만 쓸 수 있다', '배우는 데 아주 오랜 시간이 걸린다'], answer: '소리와 글자의 관계를 이해하기 쉽다', explanation: '한글은 소리를 내는 원리와 글자 모양의 관계가 잘 드러납니다.' },
-  { category: '한글 창제', meaning: '세종대왕이 훈민정음을 만든 마음과 가장 가까운 것은 무엇일까요?', choices: ['백성을 사랑하는 마음', '경쟁에서 이기려는 마음', '비밀을 숨기려는 마음'], answer: '백성을 사랑하는 마음', explanation: '훈민정음에는 백성을 생각한 세종대왕의 애민 정신이 담겨 있습니다.' },
-  { category: '한글 창제', meaning: '오늘 우리가 한글을 지키는 방법으로 알맞은 것은 무엇일까요?', choices: ['우리말을 아끼고 바르게 쓰기', '어려운 말만 골라 쓰기', '다른 사람의 말을 놀리기'], answer: '우리말을 아끼고 바르게 쓰기', explanation: '우리말을 존중하고 정확하게 쓰는 것이 한글 사랑의 시작입니다.' },
+  quizPrompt('세종대왕 이야기', '세종실록에 따르면 훈민정음은 몇 년에 만들어졌을까요?', '1443년', ['1418년', '1446년', '1450년'], '세종실록은 세종이 1443년에 언문 28자를 만들었다고 기록합니다.'),
+  quizPrompt('세종대왕 이야기', '훈민정음 해례본이 세상에 나온 해는 언제일까요?', '1446년', ['1443년', '1447년', '1459년'], '훈민정음 해례본은 1446년에 간행되었습니다.'),
+  quizPrompt('한글 창제 원리', '훈민정음의 기본 모음 세 글자는 무엇일까요?', 'ㆍ · ㅡ · ㅣ', ['ㅏ · ㅓ · ㅗ', 'ㄱ · ㄴ · ㅁ', 'ㅑ · ㅕ · ㅛ'], 'ㆍ, ㅡ, ㅣ는 각각 하늘·땅·사람을 본뜬 기본 모음입니다.'),
+  quizPrompt('한글 창제 원리', '기본 모음 ㆍ는 무엇을 본떠 만들었을까요?', '둥근 하늘', ['평평한 땅', '서 있는 사람', '산과 강'], '아래아(ㆍ)의 둥근 모양은 둥근 하늘을 나타냅니다.'),
+  quizPrompt('한글 창제 원리', '기본 모음 ㅡ는 무엇을 나타낼까요?', '평평한 땅', ['둥근 하늘', '서 있는 사람', '물결치는 바다'], '가로획 ㅡ는 평평한 땅을 나타냅니다.'),
+  quizPrompt('한글 창제 원리', '기본 모음 ㅣ는 무엇을 본뜬 글자일까요?', '사람이 서 있는 모습', ['둥근 하늘', '평평한 땅', '입을 벌린 모습'], '세로획 ㅣ는 사람이 서 있는 모습을 나타냅니다.'),
+  quizPrompt('한글 창제 원리', '기본 자음 ㄱ은 발음할 때 무엇의 모양을 본떴을까요?', '혀뿌리가 목구멍을 막는 모양', ['입술을 다문 모양', '이의 모양', '혀끝이 윗잇몸에 닿는 모양'], 'ㄱ은 소리 낼 때 혀뿌리가 목구멍을 막는 모양을 본떴습니다.'),
+  quizPrompt('한글 창제 원리', '기본 자음 ㄴ은 발음할 때 무엇의 모양을 본떴을까요?', '혀끝이 윗잇몸에 닿는 모양', ['입술을 다문 모양', '이의 모양', '목구멍의 모양'], 'ㄴ은 혀끝이 윗잇몸에 닿는 모양을 본떠 만들었습니다.'),
+  quizPrompt('한글 창제 원리', '기본 자음 ㅁ은 무엇의 모양을 본뜬 글자일까요?', '입', ['혀뿌리', '이', '목구멍'], 'ㅁ은 입의 모양을 본뜬 기본 자음입니다.'),
+  quizPrompt('한글 창제 원리', '기본 자음 ㅅ은 무엇의 모양을 본뜬 글자일까요?', '이', ['입', '혀끝', '목구멍'], 'ㅅ은 이의 모양을 본떠 만들었습니다.'),
+  quizPrompt('한글 창제 원리', '기본 자음 ㅇ은 발음 기관 중 무엇을 본떴을까요?', '목구멍', ['입술', '혀끝', '이'], 'ㅇ은 목구멍의 모양을 본떠 만든 글자입니다.'),
+  quizPrompt('한글 창제 원리', '훈민정음의 기본 자음 다섯 글자로 묶인 것은 무엇일까요?', 'ㄱ · ㄴ · ㅁ · ㅅ · ㅇ', ['ㄱ · ㄷ · ㅂ · ㅈ · ㅎ', 'ㄴ · ㄹ · ㅁ · ㅍ · ㅋ', 'ㄱ · ㄴ · ㄷ · ㄹ · ㅁ'], 'ㄱ, ㄴ, ㅁ, ㅅ, ㅇ을 기본으로 삼아 다른 자음을 만들었습니다.'),
+  quizPrompt('한글 창제 원리', '훈민정음에서 기본 글자에 획을 더해 만든 자음의 예는 무엇일까요?', 'ㄱ에서 획을 더한 ㅋ', ['ㅣ에서 획을 더한 ㄴ', 'ㆍ에서 획을 더한 ㅁ', 'ㅡ에서 획을 더한 ㅅ'], '기본 자음에 획을 더해 ㅋ, ㅌ, ㅍ, ㅊ 같은 글자를 만들었습니다.'),
+  quizPrompt('한글 창제 원리', '한 음절을 이루는 초성·중성·종성은 무엇을 뜻할까요?', '첫소리·가운데소리·끝소리', ['높은소리·낮은소리·긴소리', '자음·문장·문단', '왼쪽·가운데·오른쪽'], '초성은 첫소리, 중성은 가운데소리, 종성은 끝소리입니다.'),
+  quizPrompt('한글 창제 원리', '‘강’에서 받침 ㅇ처럼 음절의 끝에 오는 소리 자리를 무엇이라고 할까요?', '종성', ['초성', '중성', '각성'], '종성은 음절의 끝소리 자리입니다.'),
+  quizPrompt('한글 창제 원리', '훈민정음 해례본은 어떤 내용을 알려 주는 책일까요?', '글자를 만든 원리와 쓰는 법', ['궁궐을 짓는 방법', '농사철과 날씨만 기록한 책', '왕실 음식 조리법'], '해례본에는 새 글자의 원리와 사용법, 예가 담겨 있습니다.'),
+  quizPrompt('한글 창제 원리', '‘해례’라는 이름에 가장 가까운 뜻은 무엇일까요?', '풀이와 보기', ['노래와 춤', '지도와 여행', '날짜와 달력'], '해례는 원리를 풀어 설명하고 예를 들어 보여 준다는 뜻입니다.'),
+  quizPrompt('한글 창제 원리', '세종실록에 기록된 처음 훈민정음 글자 수는 몇 자일까요?', '28자', ['24자', '26자', '30자'], '세종실록에는 세종이 언문 28자를 만들었다고 적혀 있습니다.'),
+  quizPrompt('한글 창제 원리', '훈민정음이라는 이름의 뜻은 무엇일까요?', '백성을 가르치는 바른 소리', ['하늘이 내린 큰 글', '왕이 쓰는 비밀 문자', '옛글을 모은 책'], '훈민정음은 ‘백성을 가르치는 바른 소리’라는 뜻입니다.'),
+  quizPrompt('세종대왕 이야기', '훈민정음 창제 기록에서 글자를 직접 만든 임금으로 적힌 분은 누구일까요?', '세종', ['태조', '세조', '정조'], '세종실록은 세종이 친히 언문 28자를 만들었다고 기록합니다.'),
+  quizPrompt('세종대왕 이야기', '세종실록에 따르면 훈민정음은 어떤 소리까지 적을 수 있도록 했을까요?', '우리말과 여러 말을 적을 수 있었어요', ['궁중 음악만 적을 수 있었어요', '한자의 뜻만 적을 수 있었어요', '숫자만 적을 수 있었어요'], '실록은 문자와 우리말을 두루 적을 수 있다고 설명합니다.'),
+  quizPrompt('세종대왕 이야기', '1444년 세종실록에 기록된 최만리 등의 상소는 무엇을 보여 줄까요?', '새 문자와 관련 사업을 둘러싼 당시의 논의', ['한글날 날짜를 정한 회의', '측우기를 만든 과정', '용비어천가의 노래 경연'], '세종실록에는 새 문자와 운서 편찬을 둘러싼 상소와 논의가 기록되어 있습니다.'),
+  quizPrompt('세종대왕 이야기', '훈민정음 해례본의 서문을 쓴 집현전 학자는 누구일까요?', '정인지', ['장영실', '김종서', '황희'], '정인지는 해례본의 서문을 썼고, 집현전 학자들은 해례를 함께 편찬했습니다.'),
+  quizPrompt('세종대왕 이야기', '세종 때 새 글자로 지어 널리 읽히도록 한 초기 책으로 알맞은 것은 무엇일까요?', '용비어천가', ['난중일기', '동의보감', '홍길동전'], '용비어천가는 훈민정음으로 지은 초기의 중요한 책입니다.'),
+  quizPrompt('세종대왕 이야기', '세종실록의 기록에 따르면 1447년 관리를 뽑을 때 어떤 시험을 먼저 보도록 했을까요?', '훈민정음 시험', ['활쏘기 시험', '그림 그리기 시험', '외국어 회화 시험'], '세종실록에는 일부 관리 선발에서 훈민정음을 먼저 시험하도록 한 기록이 있습니다.'),
+  quizPrompt('세종대왕 이야기', '한글날 10월 9일은 무엇을 기념하는 날일까요?', '훈민정음 반포', ['훈민정음 창제 착수', '세종대왕 즉위', '집현전 창설'], '한글날은 훈민정음 반포를 기념합니다.'),
+  quizPrompt('세종대왕 이야기', '훈민정음을 만든 까닭으로 세종대왕의 뜻과 가장 가까운 것은 무엇일까요?', '백성이 쉽게 익혀 날마다 쓰도록 하기 위해', ['궁궐에서만 쓰도록 하기 위해', '책을 어렵게 만들기 위해', '외국과의 편지를 막기 위해'], '세종은 백성이 쉽게 익혀 편하게 쓰도록 새 글자를 만들었습니다.'),
+  quizPrompt('세종대왕 이야기', '훈민정음 해례 편찬에 참여한 집현전 학자는 모두 몇 명으로 알려져 있을까요?', '여덟 명', ['세 명', '다섯 명', '열두 명'], '정인지와 신숙주, 성삼문 등 집현전 학자 여덟 명이 해례 편찬에 참여했습니다.'),
+  quizPrompt('세종대왕 이야기', '훈민정음으로 만든 글을 사람들이 익히도록 책을 펴낸 이유로 알맞은 것은 무엇일까요?', '새 글자를 널리 배우고 쓰게 하려고', ['새 글자를 숨기려고', '한자책을 모두 없애려고', '궁중에서만 읽게 하려고'], '새 글자로 책을 펴내며 사람들이 훈민정음을 익히고 사용할 수 있도록 했습니다.'),
 ];
 
 function shuffledIndexes(length, avoidFirst) {
@@ -369,18 +393,17 @@ function currentPracticePrompt(progress) {
   return { id: `practice-${id}`, prompt };
 }
 
-// Every third quiz question is about Hangul's creation so the large word pool
-// does not crowd those questions out.
+// Alternate native-word definitions with documented Hangul/Sejong questions.
 function currentQuizPrompt(progress) {
   const position = progress.promptIndex;
   let id;
   let prompt;
-  if (position % 3 === 2) {
-    const index = deckIndex(progress, 'hangul', HANGUL_CREATION_QUIZ_PROMPTS.length, Math.floor(position / 3));
+  if (position % 2 === 1) {
+    const index = deckIndex(progress, 'hangul', HANGUL_CREATION_QUIZ_PROMPTS.length, Math.floor(position / 2));
     id = `quiz-${position}-hangul-${index}`;
     prompt = HANGUL_CREATION_QUIZ_PROMPTS[index];
   } else {
-    const index = deckIndex(progress, 'wordQuiz', WORD_QUIZ_PROMPTS.length, position - Math.floor(position / 3));
+    const index = deckIndex(progress, 'wordQuiz', WORD_QUIZ_PROMPTS.length, Math.floor(position / 2));
     id = `quiz-${position}-word-${index}`;
     prompt = WORD_QUIZ_PROMPTS[index];
   }
@@ -463,8 +486,8 @@ const REPAIR_PROMPTS = [
     explanation: '문장의 의미가 잘 드러나도록 낱말 사이를 띄어 씁니다.',
   },
   {
-    question: '세종대왕님고맙습니다',
-    answer: '세종대왕님 고맙습니다',
+    question: '세종대왕님감사합니다',
+    answer: '세종대왕님 감사합니다',
     explanation: '부르는 말과 이어지는 말을 알맞게 띄어 씁니다.',
   },
   {
@@ -522,7 +545,7 @@ const REPAIR_PROMPTS = [
 const RELAY_PROMPTS = [
   '우리말을 아끼고 한글을 소중히 지켜요.',
   '한글날에는 우리말의 아름다움을 함께 느껴요.',
-  '세종대왕님, 누구나 읽고 쓰는 세상을 열어 주셔서 고맙습니다.',
+  '세종대왕님, 누구나 읽고 쓰는 세상을 열어 주셔서 감사합니다.',
   '정확한 말과 따뜻한 마음으로 서로를 존중해요.',
   '세종대왕은 백성이 쉽게 읽고 쓰도록 훈민정음을 만들었습니다.',
   '훈민정음은 1446년에 세상에 반포되었습니다.',
@@ -547,7 +570,7 @@ const PLACEMENT_PROMPTS = [
 
 const MODES = [
   { id: 'word', name: '말모이 기본전', description: '더 다양해진 순우리말을 빠르고 정확하게 입력해요.', duration: ROUND_DURATION_MS },
-  { id: 'quiz', name: '뜻풀이 객관식 역전전', description: '순우리말과 한글 창제 이야기를 골라 배워요.', duration: ROUND_DURATION_MS },
+  { id: 'quiz', name: '뜻풀이 객관식 역전전', description: '네 가지 보기로 순우리말과 한글 역사를 풀어요. 오답은 30점 감점!', duration: ROUND_DURATION_MS },
   { id: 'repair', name: '바른말 수리공', description: '띄어쓰기를 제대로 해서 바른 문장을 완성해요.', duration: ROUND_DURATION_MS },
   { id: 'relay', name: '훈민정음 랜덤 릴레이', description: '대표가 정답을 맞히면 줄을 2칸 당기고, 친구들의 정답은 1점씩 보태요.', duration: ROUND_DURATION_MS },
 ];
@@ -870,6 +893,15 @@ function addTeamScore(room, team, score, checkWin = true) {
   game.scores[team] += weighted * multiplier;
 
   if (checkWin) checkRopeWin(room);
+}
+
+function subtractTeamScore(room, team, points) {
+  const game = room.game;
+  const penalty = Math.max(0, points);
+  if (!penalty) return;
+  game.rawScores[team] -= penalty / getMultipliers(room)[team];
+  game.scores[team] -= penalty;
+  checkRopeWin(room);
 }
 
 function addRelayScore(room, team, score) {
@@ -1239,10 +1271,14 @@ function handleChoice(player, choice) {
   const elapsedMs = Date.now() - player.progress.promptStartedAt;
   const correct = choice === prompt.answer;
   const speedBonus = Math.max(0, 40 * (1 - Math.min(elapsedMs, 8_000) / 8_000));
-  const score = correct ? 60 + speedBonus : 0;
+  const score = correct ? 60 + speedBonus : -QUIZ_WRONG_PENALTY;
 
-  creditPlayer(player, score);
-  addTeamScore(room, player.team, score);
+  if (correct) {
+    creditPlayer(player, score);
+    addTeamScore(room, player.team, score);
+  } else {
+    subtractTeamScore(room, player.team, QUIZ_WRONG_PENALTY);
+  }
   player.progress.promptIndex += 1;
   player.progress.promptStartedAt = Date.now();
   send(player.ws, {
