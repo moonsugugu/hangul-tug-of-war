@@ -23,6 +23,18 @@ let socket;
 let lastViewKey = '';
 let lastPromptKey = '';
 let tugScene = null;
+let isComposing = false;
+let pendingRender = null;
+let pendingDraftReset = false;
+
+function renderWhenReady(kind) {
+  if (isComposing) {
+    pendingRender = kind === 'full' ? 'full' : pendingRender || kind;
+    return;
+  }
+  if (kind === 'full') render();
+  else renderPromptOnly();
+}
 const NAME_FLASH_MS = 1_200;
 // Shared with every mounted scene so a flash survives the scene being rebuilt.
 const nameFlashUntil = new Map();
@@ -137,15 +149,20 @@ function connect() {
         message.prompt?.id,
         message.relay?.blueId,
         message.relay?.whiteId,
-        message.relay?.lastResult?.winner,
+        message.relay?.deadline,
       ].join('|');
+      const promptChanged = promptKey !== lastPromptKey;
+      if (promptChanged) {
+        state.draft = '';
+        if (isComposing) pendingDraftReset = true;
+      }
       if (viewKey !== lastViewKey) {
         lastViewKey = viewKey;
         lastPromptKey = promptKey;
-        render();
-      } else if (promptKey !== lastPromptKey) {
+        renderWhenReady('full');
+      } else if (promptChanged) {
         lastPromptKey = promptKey;
-        renderPromptOnly();
+        renderWhenReady('prompt');
       }
       return;
     }
@@ -539,6 +556,8 @@ function renderPromptOnly() {
   root.innerHTML = data.phase === 'lobby'
     ? renderPracticeCard(data)
     : data.phase === 'placement' ? renderPlacementCard(data) : renderPrompt(data);
+  const input = root.querySelector('#answer-input');
+  if (input) input.value = state.draft;
   bindPromptEvents(root);
   updateDynamic();
 }
@@ -594,6 +613,7 @@ function renderScoreboard(data) {
 function renderArena(data) {
   const position = Math.round(data.ropePosition ?? 50);
   const ropeStep = getRopeStep(data);
+  const maxSteps = getRopeMaxSteps(data);
   const bluePlayers = data.players?.filter((player) => player.team === 'blue') || [];
   const whitePlayers = data.players?.filter((player) => player.team === 'white') || [];
   const crowded = bluePlayers.length + whitePlayers.length > 8;
@@ -610,7 +630,7 @@ function renderArena(data) {
           </div>
           <span class="scene-team-tag scene-team-tag--white" aria-hidden="true">백팀 · ${data.counts.white}명</span>
         </div>
-        <div class="scene-step-track" aria-hidden="true"><b>청</b>${Array.from({ length: 21 }, (_, index) => `<i class="rope-step ${index === 10 + ropeStep ? 'is-current' : ''}" data-rope-tick="${index}"></i>`).join('')}<b>백</b></div>
+        <div class="scene-step-track" aria-hidden="true"><b>청</b>${Array.from({ length: maxSteps * 2 + 1 }, (_, index) => `<i class="rope-step ${index === maxSteps ? 'is-center' : ''} ${index === maxSteps + ropeStep ? 'is-current' : ''}" data-rope-tick="${index}"></i>`).join('')}<b>백</b></div>
         <div class="scene-position-label" aria-live="polite">${getRopeStepLabel(data)}</div>
       </div>
       <div class="scene-accessibility"><strong>경기장 안내</strong> ${crowded ? `청팀 ${bluePlayers.length}명 · 백팀 ${whitePlayers.length}명 참가 중` : `청팀 ${bluePlayers.map((player) => `${getCharacter(player.characterId).name} ${player.name}`).join(', ') || '참가자 없음'} · 백팀 ${whitePlayers.map((player) => `${getCharacter(player.characterId).name} ${player.name}`).join(', ') || '참가자 없음'}`}</div>
@@ -618,14 +638,20 @@ function renderArena(data) {
   `;
 }
 
+function getRopeMaxSteps(data) {
+  return Math.max(1, Number(data.ropeMaxSteps) || 15);
+}
+
 function getRopeStep(data) {
-  const inferred = Math.round(((Number(data.ropePosition ?? 50) - 50) / 43) * 10);
-  return Math.max(-10, Math.min(10, Number(data.ropeStep ?? inferred)));
+  const maxSteps = getRopeMaxSteps(data);
+  const inferred = Math.round(((Number(data.ropePosition ?? 50) - 50) / 43) * maxSteps);
+  return Math.max(-maxSteps, Math.min(maxSteps, Number(data.ropeStep ?? inferred)));
 }
 
 function getRopeStepLabel(data) {
   const step = getRopeStep(data);
-  return step === 0 ? '줄 위치 중앙 · 0/10칸' : `줄 위치 ${step < 0 ? '청팀' : '백팀'} 방향 ${Math.abs(step)}/10칸`;
+  const maxSteps = getRopeMaxSteps(data);
+  return step === 0 ? `줄 위치 중앙 · 0/${maxSteps}칸` : `줄 위치 ${step < 0 ? '청팀' : '백팀'} 방향 ${Math.abs(step)}/${maxSteps}칸`;
 }
 
 async function toggleBgm() {
@@ -701,10 +727,11 @@ function renderPrompt(data) {
 
   if (prompt.kind === 'relay') {
     const selected = prompt.selected;
+    const representativeName = (id) => (data.players || []).find((player) => player.id === id)?.name || '선정 중';
     return `
       <section class="prompt-card prompt-card--relay">
         <div class="prompt-meta"><span class="round-badge">ROUND ${data.roundNumber}${data.roundNumber === 5 ? ' FINAL' : ''}</span><span class="prompt-help">${selected ? '당신이 이번 팀 대표예요!' : '랜덤 대표 선수의 대결을 지켜봐 주세요'}</span></div>
-        <div class="relay-versus"><span>청팀 대표</span><b>VS</b><span>백팀 대표</span></div>
+        <div class="relay-versus"><span>청팀 대표 <strong>${escapeHtml(representativeName(data.relay?.blueId))}</strong></span><b>VS</b><span>백팀 대표 <strong>${escapeHtml(representativeName(data.relay?.whiteId))}</strong></span></div>
         <div class="relay-sentence">${escapeHtml(prompt.prompt)}</div>
         ${selected ? '<form id="answer-form" class="answer-form"><input id="answer-input" class="answer-input" autocomplete="off" spellcheck="false" placeholder="대표 선수만 입력할 수 있어요" /><button class="submit-button">대표 출전 <span>↗</span></button></form>' : '<div class="spectator-message">대표 선수가 문장을 입력하는 중이에요…</div>'}
       </section>
@@ -730,6 +757,9 @@ function renderGame() {
 }
 
 function render() {
+  isComposing = false;
+  pendingRender = null;
+  pendingDraftReset = false;
   const data = state.data;
   const inRoomPhase = Boolean(data?.phase && state.joined && data.phase !== 'lobby');
   const isGame = inRoomPhase && !['placement', 'teamReveal'].includes(data.phase);
@@ -742,6 +772,8 @@ function render() {
       : data.phase === 'teamReveal' ? renderTeamReveal(data)
         : renderGame();
   app.innerHTML = `${renderHeader()}<main>${page}</main><div id="notice-root"></div><div id="toast-root"></div>`;
+  const input = document.querySelector('#answer-input');
+  if (input) input.value = state.draft;
   bindEvents();
   renderRoomQr();
   updateDynamic();
@@ -796,6 +828,22 @@ function bindPromptEvents(root) {
   root.querySelectorAll('[data-choice]').forEach((button) => {
     button.addEventListener('click', () => submitChoice(button.dataset.choice));
   });
+  root.querySelector('#answer-input')?.addEventListener('compositionstart', () => { isComposing = true; });
+  root.querySelector('#answer-input')?.addEventListener('compositionend', (event) => {
+    state.draft = event.target.value;
+    // Some IMEs emit one final input event after compositionend. Let it land
+    // before replacing the form, then discard it if the question has changed.
+    setTimeout(() => {
+      isComposing = false;
+      if (pendingDraftReset) state.draft = '';
+      pendingDraftReset = false;
+      if (pendingRender) {
+        const kind = pendingRender;
+        pendingRender = null;
+        renderWhenReady(kind);
+      }
+    }, 0);
+  });
   root.querySelector('#answer-input')?.addEventListener('input', (event) => {
     state.draft = event.target.value;
     // During the typing test, a perfectly typed sentence advances on its own
@@ -840,7 +888,7 @@ function updateDynamic() {
   const revealTime = document.querySelector('#reveal-time');
   if (revealTime) revealTime.textContent = getTimeLabel(data.teamRevealRemainingMs);
   if (positionLabel) positionLabel.textContent = getRopeStepLabel(data);
-  const currentTick = 10 + getRopeStep(data);
+  const currentTick = getRopeMaxSteps(data) + getRopeStep(data);
   document.querySelectorAll('[data-rope-tick]').forEach((tick) => {
     tick.classList.toggle('is-current', Number(tick.dataset.ropeTick) === currentTick);
   });

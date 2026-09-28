@@ -20,7 +20,7 @@ const INTERMISSION_MS = Number(process.env.INTERMISSION_MS || 4_000);
 const WHEEL_DURATION_MS = Number(process.env.WHEEL_DURATION_MS || 7_000);
 const PLACEMENT_MS = Number(process.env.PLACEMENT_MS || 30_000);
 const TEAM_REVEAL_MS = Number(process.env.TEAM_REVEAL_MS || 7_000);
-const ROPE_MAX_STEPS = 10;
+const ROPE_MAX_STEPS = 15;
 const ROPE_POINTS_PER_STEP = 75;
 const MAX_PLAYERS_PER_ROOM = 30;
 const CHARACTER_IDS = ['rabbit', 'bear', 'cat', 'chick', 'panda', 'sheep', 'fox', 'penguin'];
@@ -723,7 +723,7 @@ function publicStateFor(room, player) {
   const multipliers = getMultipliers(room);
   const difference = game.scores.blue - game.scores.white;
   // One visible step is roughly one accurate answer. Either team can pull the
-  // center marker through all ten steps, even if the other team has no score.
+  // center marker through all fifteen steps, even if the other team has no score.
   const ropeStep = Math.max(-ROPE_MAX_STEPS, Math.min(ROPE_MAX_STEPS, -Math.round(difference / ROPE_POINTS_PER_STEP)));
   const ropePosition = 50 + ropeStep * (43 / ROPE_MAX_STEPS);
   const mode = getMode(room);

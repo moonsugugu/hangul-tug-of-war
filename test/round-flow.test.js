@@ -77,6 +77,7 @@ test('라운드별 승리, 10초 연장, 2:2 돌림판 결승', async (t) => {
   assert.equal(firstWhite.self.team, 'white', '아무도 치지 않으면 입장 순서대로 번갈아 배정돼요');
   assert.equal(firstWhite.self.typingSpeed, 0);
   assert.equal(first.totalRounds, 5, '5라운드 결승 슬롯을 항상 보여 줘요');
+  assert.equal(first.ropeMaxSteps, 15, '줄을 양쪽으로 15칸씩 당길 수 있어요');
   assert.equal(first.mode.duration, 900);
   const overtime = await blue.waitFor((state) => state.phase === 'round' && state.overtimeCount === 1);
   assert.equal(overtime.roundWins.blue, 0);
@@ -97,6 +98,8 @@ test('라운드별 승리, 10초 연장, 2:2 돌림판 결승', async (t) => {
   assert.deepEqual(thirdEnd.roundWins, { blue: 2, white: 1 });
 
   const fourth = await white.waitFor((state) => state.phase === 'round' && state.roundIndex === 3 && state.prompt?.kind === 'relay');
+  assert.ok(fourth.players.some((player) => player.id === fourth.relay.blueId && player.team === 'blue'));
+  assert.ok(fourth.players.some((player) => player.id === fourth.relay.whiteId && player.team === 'white'));
   white.send({ type: 'relayAnswer', answer: fourth.prompt.prompt });
   blue.send({ type: 'relayAnswer', answer: '오답' });
   const wheel = await blue.waitFor((state) => state.phase === 'wheel');
@@ -117,7 +120,7 @@ test('라운드별 승리, 10초 연장, 2:2 돌림판 결승', async (t) => {
   assert.deepEqual(result.roundWins, { blue: 3, white: 2 });
   assert.equal(result.roundScores.length, 5);
 
-  // Ten rope steps must award only this round, not end the whole match.
+  // Fifteen rope steps must award only this round, not end the whole match.
   const quickBlueSocket = await connect();
   const quickWhiteSocket = await connect();
   t.after(() => { quickBlueSocket.close(); quickWhiteSocket.close(); });
@@ -130,7 +133,7 @@ test('라운드별 승리, 10초 연장, 2:2 돌림판 결승', async (t) => {
   quickBlue.send({ type: 'start' });
   const typedWords = [];
   let quickState = await quickBlue.waitFor((state) => state.phase === 'round' && state.roundIndex === 0);
-  for (let count = 0; count < 20 && quickState.phase === 'round'; count += 1) {
+  for (let count = 0; count < 30 && quickState.phase === 'round'; count += 1) {
     const { id, word } = quickState.prompt;
     typedWords.push(word);
     quickBlue.send({ type: 'answer', answer: word });
@@ -139,6 +142,7 @@ test('라운드별 승리, 10초 연장, 2:2 돌림판 결승', async (t) => {
   assert.equal(new Set(typedWords).size, typedWords.length, '한 바퀴 안에서는 같은 낱말이 다시 나오지 않아야 해요');
   assert.equal(quickState.phase, 'intermission');
   assert.equal(quickState.roundScores[0].reason, 'rope');
+  assert.equal(Math.abs(quickState.ropeStep), 15);
   assert.deepEqual(quickState.roundWins, { blue: 1, white: 0 });
   assert.ok(quickState.players.find((player) => player.id === quickState.self.id).scoreCount >= 1, '점수를 얻으면 이름표 반짝임 카운터가 올라가요');
 

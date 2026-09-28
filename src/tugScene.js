@@ -653,11 +653,16 @@ function createNameTags(container, characters, selfId) {
     name.className = 'name-tag__name';
     name.textContent = character.name;
     pill.append(name);
+    const representative = document.createElement('b');
+    representative.className = 'name-tag__representative';
+    representative.textContent = '대표';
+    representative.hidden = true;
+    pill.append(representative);
     const line = document.createElement('i');
     line.className = 'name-tag__line';
     tag.append(pill, line);
     layer.append(tag);
-    character.nameTag = { el: tag, line, dy: 0, flashSeen: 0, flashing: false };
+    character.nameTag = { el: tag, line, representative, dy: 0, flashSeen: 0, flashing: false };
   }
   container.append(layer);
   return layer;
@@ -671,8 +676,9 @@ function assignTiers(members, anchorsX) {
   const tiers = [];
   const placed = new Map();
   const order = [...members.keys()].sort((a, b) => {
-    const selfA = members[a].nameTag.el.classList.contains('is-self') ? 0 : 1;
-    const selfB = members[b].nameTag.el.classList.contains('is-self') ? 0 : 1;
+    const priority = (member) => member.nameTag.el.classList.contains('is-representative') ? 0 : member.nameTag.el.classList.contains('is-self') ? 1 : 2;
+    const selfA = priority(members[a]);
+    const selfB = priority(members[b]);
     return (selfA - selfB) || (anchorsX[a] - anchorsX[b]);
   });
   for (const index of order) {
@@ -699,9 +705,9 @@ function layoutNameTags(characters, camera, pxPerUnit) {
     let result;
     for (const density of ['full', 'compact', 'selfOnly']) {
       for (const { nameTag } of members) {
-        const isSelf = nameTag.el.classList.contains('is-self');
-        nameTag.el.classList.toggle('is-compact', density !== 'full' && !isSelf);
-        nameTag.el.classList.toggle('is-idle', density === 'selfOnly' && !isSelf);
+        const isImportant = nameTag.el.classList.contains('is-self') || nameTag.el.classList.contains('is-representative');
+        nameTag.el.classList.toggle('is-compact', density !== 'full' && !isImportant);
+        nameTag.el.classList.toggle('is-idle', density === 'selfOnly' && !isImportant);
       }
       result = assignTiers(members, anchorsX);
       if (result.tierCount <= NAME_TAG_MAX_TIERS) break;
@@ -780,6 +786,21 @@ export function mountTugScene(container, data, { selfId, flashUntil } = {}) {
   let built = false;
   let nameLayer;
   let pxPerUnit = 1;
+  let currentData = data;
+  let representativeKey = '';
+
+  function updateRepresentatives(nextData) {
+    const relay = nextData.phase === 'round' && nextData.mode?.id === 'relay' ? nextData.relay : null;
+    const nextKey = `${relay?.blueId || ''}|${relay?.whiteId || ''}`;
+    if (nextKey === representativeKey) return;
+    representativeKey = nextKey;
+    for (const character of characters) {
+      const isRepresentative = character.playerId === relay?.[`${character.team}Id`];
+      character.nameTag.el.classList.toggle('is-representative', isRepresentative);
+      character.nameTag.representative.hidden = !isRepresentative;
+    }
+    if (nameLayer) layoutNameTags(characters, camera, pxPerUnit);
+  }
 
   function resize() {
     const width = Math.max(320, container.clientWidth || 800);
@@ -815,6 +836,7 @@ export function mountTugScene(container, data, { selfId, flashUntil } = {}) {
     footDust = createFootDust(scene, characters, layout.scaleFactor);
     nameLayer = createNameTags(container, characters, selfId);
     resize();
+    updateRepresentatives(currentData);
     built = true;
   }).catch((error) => {
     if (!disposed) {
@@ -879,6 +901,8 @@ export function mountTugScene(container, data, { selfId, flashUntil } = {}) {
       renderer.dispose();
     },
     update(nextData) {
+      currentData = nextData;
+      if (built) updateRepresentatives(nextData);
       const nextTarget = ((Number(nextData.ropePosition ?? 50) - 50) / 50) * ROPE_TRAVEL;
       const delta = nextTarget - targetRopeX;
       if (Math.abs(delta) > 0.001) {
