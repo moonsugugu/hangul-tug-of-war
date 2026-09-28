@@ -201,6 +201,26 @@ test('라운드별 승리, 10초 연장, 2:2 돌림판 결승', async (t) => {
   assert.equal(idleEnd.roundScores[3].reason, 'tiebreak');
   assert.equal(idleEnd.roundScores[3].overtimeCount, 2);
 
+  // Unsubmitted drafts are scored once when a typing round expires.
+  relayHost.send({ type: 'restart' });
+  await relayHost.waitFor((state) => state.phase === 'lobby');
+  relayHost.send({ type: 'start' });
+  const draftWord = await relayHost.waitFor((state) => state.phase === 'round' && state.roundIndex === 0);
+  relayHost.send({ type: 'draft', promptId: draftWord.prompt.id, text: draftWord.prompt.word.slice(0, 1) });
+  const wordEnd = await relayHost.waitFor((state) => state.phase === 'intermission' && state.roundIndex === 0);
+  assert.ok(wordEnd.scores.blue > 0, '단어를 쓰다 시간이 끝나도 부분 점수가 올라가요');
+  const draftQuiz = await relayHost.waitFor((state) => state.phase === 'round' && state.roundIndex === 1);
+  relayHost.send({ type: 'choice', choice: draftQuiz.prompt.choices[0] });
+  const draftRepair = await relayHost.waitFor((state) => state.phase === 'round' && state.roundIndex === 2);
+  relayHost.send({ type: 'draft', promptId: draftRepair.prompt.id, text: '한글날을 맞아' });
+  const repairEnd = await relayHost.waitFor((state) => state.phase === 'intermission' && state.roundIndex === 2);
+  assert.ok(repairEnd.scores.blue > 0, '문장을 고치다 시간이 끝나도 부분 점수가 올라가요');
+  const draftRelay = await relayHost.waitFor((state) => state.phase === 'round' && state.roundIndex === 3 && state.relay);
+  relayHost.send({ type: 'draft', deadline: draftRelay.relay.deadline, text: draftRelay.prompt.prompt.slice(0, 10) });
+  const relayDraftEnd = await relayHost.waitFor((state) => state.phase === 'results' && state.roundIndex === 3, 8_000);
+  assert.ok(relayDraftEnd.scores.blue > 0, '릴레이 문장을 쓰다 라운드가 끝나도 부분 점수가 올라가요');
+  assert.equal(relayDraftEnd.roundScores[3].winner, 'blue');
+
   // The two players who actually type must be split across teams.
   const placementSockets = await Promise.all(Array.from({ length: 4 }, () => connect()));
   t.after(() => placementSockets.forEach((socket) => socket.close()));

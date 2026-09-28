@@ -873,6 +873,7 @@ function resetPlayerProgress(room) {
   const now = Date.now();
   for (const player of getActivePlayers(room)) {
     player.progress = { promptIndex: 0, promptStartedAt: now };
+    player.roundDraft = null;
   }
 }
 
@@ -903,6 +904,7 @@ function beginRound(room, index) {
 function finishRound(room, reason = 'time') {
   const game = room.game;
   if (game.phase !== 'round') return;
+  if (reason === 'time') settleRoundDrafts(room);
   const bluePoints = Math.round(game.scores.blue);
   const whitePoints = Math.round(game.scores.white);
   const relayTiebreak = bluePoints === whitePoints && game.mode === 'relay' && game.overtimeCount >= MAX_RELAY_OVERTIMES;
@@ -910,6 +912,7 @@ function finishRound(room, reason = 'time') {
     game.overtimeCount += 1;
     game.roundEndsAt = Date.now() + OVERTIME_MS;
     game.notice = `동점! ${Math.round(OVERTIME_MS / 1000)}초 연장전이 시작됩니다.`;
+    if (game.mode === 'relay') startRelayDuel(room);
     broadcast(room);
     return;
   }
@@ -973,6 +976,7 @@ function startRelayDuel(room) {
     white: getActivePlayers(room).filter((player) => player.team === 'white'),
   };
   if (!byTeam.blue.length || !byTeam.white.length) return;
+  for (const player of getActivePlayers(room)) player.roundDraft = null;
 
   const selected = {};
   for (const team of ['blue', 'white']) {
@@ -1003,6 +1007,9 @@ function finishRelayDuel(room) {
   const game = room.game;
   const relay = game.relay;
   if (game.phase !== 'round' || !relay || relay.lastResult) return;
+  settleRelayDrafts(room, relay);
+  checkRopeWin(room);
+  if (game.phase !== 'round') return;
 
   const blueScore = Object.values(relay.submissions).filter((entry) => entry.team === 'blue').reduce((sum, entry) => sum + entry.score, 0);
   const whiteScore = Object.values(relay.submissions).filter((entry) => entry.team === 'white').reduce((sum, entry) => sum + entry.score, 0);
@@ -1014,6 +1021,48 @@ function finishRelayDuel(room) {
   setTimeout(() => {
     if (rooms.get(room.id) === room && game.phase === 'round' && game.mode === 'relay' && game.relay === relay) startRelayDuel(room);
   }, 1_800);
+}
+
+function awardTimeoutScore(room, player, score) {
+  if (score <= 0) return;
+  creditPlayer(player, score);
+  addTeamScore(room, player.team, score, false);
+  send(player.ws, { type: 'timeoutScore', score });
+}
+
+function settleRelayDrafts(room, relay) {
+  for (const player of getActivePlayers(room)) {
+    const draft = player.roundDraft;
+    player.roundDraft = null;
+    if (!draft || draft.kind !== 'relay' || draft.deadline !== relay.deadline || relay.submissions[player.id] || !normalizeSentence(draft.text)) continue;
+    const result = calculateTypedScore(draft.text, relay.prompt, Date.now() - relay.startedAt, 'repair');
+    const representative = player.id === relay.blueId || player.id === relay.whiteId;
+    const score = result.score * (representative ? 10 : 1);
+    relay.submissions[player.id] = { team: player.team, exact: result.exact, score };
+    awardTimeoutScore(room, player, score);
+  }
+}
+
+function settleRoundDrafts(room) {
+  const mode = getMode(room)?.id;
+  if (mode === 'relay') {
+    if (room.game.relay && !room.game.relay.lastResult) settleRelayDrafts(room, room.game.relay);
+    return;
+  }
+  if (!['word', 'repair'].includes(mode)) return;
+  for (const player of getActivePlayers(room)) {
+    const draft = player.roundDraft;
+    player.roundDraft = null;
+    const prompt = getPromptFor(room, player);
+    if (!draft || draft.kind !== mode || draft.promptId !== prompt?.id || !normalizeSentence(draft.text)) continue;
+    const expected = mode === 'word'
+      ? currentWordPrompt(player.progress).prompt.word
+      : REPAIR_PROMPTS[player.progress.promptIndex % REPAIR_PROMPTS.length].answer;
+    const result = calculateTypedScore(draft.text, expected, Date.now() - player.progress.promptStartedAt, mode);
+    awardTimeoutScore(room, player, result.score);
+    player.progress.promptIndex += 1;
+    player.progress.promptStartedAt = Date.now();
+  }
 }
 
 function handlePlacementAnswer(room, player, answer) {
@@ -1093,6 +1142,7 @@ function handleTypedAnswer(player, answer) {
   const expected = mode.id === 'word' ? source.word : source.answer;
   const elapsedMs = Date.now() - player.progress.promptStartedAt;
   const result = calculateTypedScore(answer, expected, elapsedMs, mode.id);
+  player.roundDraft = null;
   creditPlayer(player, result.score);
   addTeamScore(room, player.team, result.score);
   player.progress.promptIndex += 1;
@@ -1158,6 +1208,7 @@ function handleRelayAnswer(player, answer, deadline) {
   const exact = normalizeSentence(answer) === normalizeSentence(relay.prompt);
   const baseScore = exact ? Math.max(0, 60 + Math.min(40, 40 * (1 - elapsedMs / RELAY_LIMIT_MS))) : 0;
   const score = baseScore * (team ? 10 : 1);
+  player.roundDraft = null;
   relay.submissions[player.id] = { team: player.team, exact, score };
   send(player.ws, { type: 'relayAnswerResult', correct: exact, score, representative: Boolean(team) });
   if (score) {
@@ -1167,6 +1218,28 @@ function handleRelayAnswer(player, answer, deadline) {
   if (game.phase !== 'round') return;
   if (getActivePlayers(room).every((entry) => relay.submissions[entry.id])) finishRelayDuel(room);
   else broadcast(room);
+}
+
+function handleDraft(player, message) {
+  const room = getRoomForPlayer(player);
+  if (!room || player.spectator || !player.progress || typeof message.text !== 'string') return;
+  const game = room.game;
+  if (game.phase !== 'round') return;
+  if (Date.now() >= game.roundEndsAt) return finishRound(room);
+  const mode = getMode(room)?.id;
+  const text = message.text.slice(0, 500);
+  if (mode === 'relay') {
+    const relay = game.relay;
+    if (!relay || relay.lastResult || relay.submissions[player.id]) return;
+    if (Date.now() >= relay.deadline) return finishRelayDuel(room);
+    if (message.deadline !== relay.deadline) return;
+    player.roundDraft = { kind: 'relay', deadline: relay.deadline, text };
+    return;
+  }
+  if (!['word', 'repair'].includes(mode)) return;
+  const prompt = getPromptFor(room, player);
+  if (message.promptId !== prompt?.id) return;
+  player.roundDraft = { kind: mode, promptId: prompt.id, text };
 }
 
 function startGame(player) {
@@ -1293,6 +1366,7 @@ function handleMessage(ws, rawMessage) {
   if (message.type === 'answer') return handleTypedAnswer(player, message.answer);
   if (message.type === 'choice') return handleChoice(player, message.choice);
   if (message.type === 'relayAnswer') return handleRelayAnswer(player, message.answer, message.deadline);
+  if (message.type === 'draft') return handleDraft(player, message);
 }
 
 function tick() {

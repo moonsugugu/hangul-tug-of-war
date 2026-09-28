@@ -204,6 +204,12 @@ function connect() {
       renderResultToast();
       return;
     }
+    if (message.type === 'timeoutScore') {
+      state.result = { correct: true, score: message.score, title: '시간 종료! 입력한 만큼 부분 점수' };
+      state.draft = '';
+      renderResultToast();
+      return;
+    }
     if (message.type === 'error') {
       showNotice(message.message);
     }
@@ -328,6 +334,19 @@ function submitRelay() {
   const answer = document.querySelector('#answer-input')?.value ?? state.draft;
   if (!answer.trim()) return;
   send({ type: 'relayAnswer', answer, deadline: prompt.relayDeadline });
+}
+
+function sendRoundDraft(text, boundPrompt, boundPhase, boundRoundIndex) {
+  const data = state.data;
+  const prompt = data?.prompt;
+  if (data?.phase !== 'round' || boundPhase !== 'round' || data.roundIndex !== boundRoundIndex || prompt?.kind !== boundPrompt?.kind) return;
+  if (prompt.kind === 'word' || prompt.kind === 'repair') {
+    if (prompt.id !== boundPrompt.id) return;
+    send({ type: 'draft', promptId: prompt.id, text });
+  } else if (prompt.kind === 'relay' && !prompt.submitted) {
+    if (prompt.relayDeadline !== boundPrompt.relayDeadline) return;
+    send({ type: 'draft', deadline: prompt.relayDeadline, text });
+  }
 }
 
 function getTimeLabel(ms) {
@@ -822,9 +841,15 @@ function bindEvents() {
 }
 
 function bindPromptEvents(root) {
+  const boundPrompt = state.data?.prompt;
+  const boundPhase = state.data?.phase;
+  const boundRoundIndex = state.data?.roundIndex;
   root.querySelector('#restart-button')?.addEventListener('click', restartGame);
   root.querySelector('#answer-form')?.addEventListener('submit', (event) => {
     event.preventDefault();
+    const current = state.data;
+    if (current?.phase !== boundPhase || current?.roundIndex !== boundRoundIndex || current?.prompt?.kind !== boundPrompt?.kind) return;
+    if (boundPrompt?.kind === 'relay' ? current.prompt.relayDeadline !== boundPrompt.relayDeadline : current.prompt?.id !== boundPrompt?.id) return;
     if (state.data?.prompt?.kind === 'relay') submitRelay();
     else submitAnswer();
   });
@@ -834,6 +859,7 @@ function bindPromptEvents(root) {
   root.querySelector('#answer-input')?.addEventListener('compositionstart', () => { isComposing = true; });
   root.querySelector('#answer-input')?.addEventListener('compositionend', (event) => {
     state.draft = event.target.value;
+    sendRoundDraft(event.target.value, boundPrompt, boundPhase, boundRoundIndex);
     // Some IMEs emit one final input event after compositionend. Let it land
     // before replacing the form, then discard it if the question has changed.
     setTimeout(() => {
@@ -849,6 +875,7 @@ function bindPromptEvents(root) {
   });
   root.querySelector('#answer-input')?.addEventListener('input', (event) => {
     state.draft = event.target.value;
+    sendRoundDraft(event.target.value, boundPrompt, boundPhase, boundRoundIndex);
     // During the typing test, a perfectly typed sentence advances on its own
     // so children who forget Enter are not undercounted.
     const prompt = state.data?.prompt;
