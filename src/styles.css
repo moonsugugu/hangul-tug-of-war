@@ -29,7 +29,9 @@ a { color: inherit; }
 .app-header { width: min(1180px, calc(100% - 36px)); margin: 0 auto; padding: 24px 0 16px; display: flex; justify-content: space-between; align-items: center; gap: 18px; }
 .brand-mark { display: inline-flex; align-items: center; gap: 11px; text-decoration: none; }
 .brand-mark__seal { width: 40px; height: 40px; display: grid; place-items: center; border: 2px solid var(--ink); border-radius: 13px 13px 13px 5px; background: var(--yellow); font-family: 'Jua', sans-serif; font-size: 22px; transform: rotate(-5deg); }
+.brand-mark__title { display: flex; align-items: baseline; flex-wrap: wrap; gap: 7px; }
 .brand-mark strong { display: block; font-family: 'Jua', sans-serif; font-size: 20px; letter-spacing: -.04em; }
+.brand-mark__version { color: var(--blue-dark); font-size: 11px; font-weight: 700; white-space: nowrap; }
 .brand-mark small { display: block; color: var(--muted); font-size: 11px; margin-top: 1px; }
 .brand-links { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 6px; font-size: 11px; }
 .made-by { color: var(--muted); margin-right: 1px; }

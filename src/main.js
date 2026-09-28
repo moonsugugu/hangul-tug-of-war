@@ -398,7 +398,7 @@ function renderHeader() {
       <a class="brand-mark" href="/" aria-label="말모이 줄다리기 홈">
         <span class="brand-mark__seal">한</span>
         <span>
-          <strong>말모이 줄다리기</strong>
+          <span class="brand-mark__title"><strong>말모이 줄다리기</strong><span class="brand-mark__version">ver.1.0.1</span></span>
           <small>한글날 기념 타자 대전</small>
         </span>
       </a>
