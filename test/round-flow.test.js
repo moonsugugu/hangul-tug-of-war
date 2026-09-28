@@ -100,8 +100,8 @@ test('라운드별 승리, 10초 연장, 2:2 돌림판 결승', async (t) => {
   const fourth = await white.waitFor((state) => state.phase === 'round' && state.roundIndex === 3 && state.prompt?.kind === 'relay');
   assert.ok(fourth.players.some((player) => player.id === fourth.relay.blueId && player.team === 'blue'));
   assert.ok(fourth.players.some((player) => player.id === fourth.relay.whiteId && player.team === 'white'));
-  white.send({ type: 'relayAnswer', answer: fourth.prompt.prompt });
-  blue.send({ type: 'relayAnswer', answer: '오답' });
+  white.send({ type: 'relayAnswer', answer: fourth.prompt.prompt, deadline: fourth.relay.deadline });
+  blue.send({ type: 'relayAnswer', answer: '오답', deadline: fourth.relay.deadline });
   const wheel = await blue.waitFor((state) => state.phase === 'wheel');
   assert.deepEqual(wheel.roundWins, { blue: 2, white: 2 });
   assert.ok(wheel.wheelSelectedIndex >= 0 && wheel.wheelSelectedIndex < 4);
@@ -112,8 +112,8 @@ test('라운드별 승리, 10초 연장, 2:2 돌림판 결승', async (t) => {
   if (final.prompt.kind === 'quiz') blue.send({ type: 'choice', choice: final.prompt.choices[0] });
   if (final.prompt.kind === 'repair') blue.send({ type: 'answer', answer: '한글날을 맞아 우리말을 사랑해요' });
   if (final.prompt.kind === 'relay') {
-    blue.send({ type: 'relayAnswer', answer: final.prompt.prompt });
-    white.send({ type: 'relayAnswer', answer: '오답' });
+    blue.send({ type: 'relayAnswer', answer: final.prompt.prompt, deadline: final.relay.deadline });
+    white.send({ type: 'relayAnswer', answer: '오답', deadline: final.relay.deadline });
   }
   const result = await blue.waitFor((state) => state.phase === 'results');
   assert.equal(result.winner, 'blue');
@@ -145,6 +145,61 @@ test('라운드별 승리, 10초 연장, 2:2 돌림판 결승', async (t) => {
   assert.equal(Math.abs(quickState.ropeStep), 15);
   assert.deepEqual(quickState.roundWins, { blue: 1, white: 0 });
   assert.ok(quickState.players.find((player) => player.id === quickState.self.id).scoreCount >= 1, '점수를 얻으면 이름표 반짝임 카운터가 올라가요');
+
+  // Every player can help in relay; the representative earns ten times the base score.
+  const relaySockets = await Promise.all(Array.from({ length: 4 }, () => connect()));
+  t.after(() => relaySockets.forEach((socket) => socket.close()));
+  const relayClients = relaySockets.map(watch);
+  const relayById = new Map();
+  const relayHost = relayClients[0];
+  relayHost.send({ type: 'createRoom', name: '응원 방장', characterId: 'bear' });
+  const relayLobby = await relayHost.waitFor((state) => state.phase === 'lobby' && state.self);
+  relayById.set(relayLobby.self.id, relayHost);
+  for (const [index, client] of relayClients.slice(1).entries()) {
+    client.send({ type: 'join', roomId: relayLobby.roomId, name: `응원 친구${index}`, characterId: 'cat' });
+    const joined = await client.waitFor((state) => state.phase === 'lobby' && state.self);
+    relayById.set(joined.self.id, client);
+  }
+  relayHost.send({ type: 'start' });
+  const relayFirst = await relayHost.waitFor((state) => state.phase === 'round' && state.roundIndex === 0);
+  relayHost.send({ type: 'answer', answer: relayFirst.prompt.word });
+  const relaySecond = await relayHost.waitFor((state) => state.phase === 'round' && state.roundIndex === 1);
+  relayHost.send({ type: 'choice', choice: relaySecond.prompt.choices[0] });
+  await relayHost.waitFor((state) => state.phase === 'round' && state.roundIndex === 2);
+  relayHost.send({ type: 'answer', answer: '한글날을 맞아 우리말을 사랑해요' });
+  const relayFourth = await relayHost.waitFor((state) => state.phase === 'round' && state.roundIndex === 3 && state.relay);
+  const blueSupporter = relayFourth.players.find((player) => player.team === 'blue' && player.id !== relayFourth.relay.blueId);
+  assert.ok(blueSupporter, '대표가 아닌 팀원도 있어야 해요');
+  const cheer = relayById.get(blueSupporter.id);
+  cheer.send({ type: 'relayAnswer', answer: relayFourth.prompt.prompt, deadline: relayFourth.relay.deadline - 1 });
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  assert.equal((await relayHost.waitFor((state) => state.phase === 'round' && state.roundIndex === 3)).scores.blue, 0, '지난 대결 답안은 점수에 반영하지 않아요');
+  cheer.send({ type: 'relayAnswer', answer: relayFourth.prompt.prompt, deadline: relayFourth.relay.deadline });
+  const cheered = await relayHost.waitFor((state) => state.phase === 'round' && state.roundIndex === 3 && state.scores.blue > 0);
+  assert.ok(cheered.rawScores.blue >= 90 && cheered.rawScores.blue <= 150, '응원 정답은 기본 점수를 즉시 더해요');
+  cheer.send({ type: 'relayAnswer', answer: relayFourth.prompt.prompt, deadline: relayFourth.relay.deadline });
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  assert.equal((await relayHost.waitFor((state) => state.phase === 'round' && state.roundIndex === 3)).scores.blue, cheered.scores.blue, '한 대결에 중복 점수를 받지 않아요');
+  relayById.get(relayFourth.relay.blueId).send({ type: 'relayAnswer', answer: relayFourth.prompt.prompt, deadline: relayFourth.relay.deadline });
+  const represented = await relayHost.waitFor((state) => state.roundIndex === 3 && state.scores.blue > cheered.scores.blue);
+  assert.ok(represented.rawScores.blue - cheered.rawScores.blue >= 900, '대표 정답은 기본 점수의 10배예요');
+  const relayEnd = await relayHost.waitFor((state) => ['intermission', 'results'].includes(state.phase) && state.roundIndex === 3);
+  assert.equal(relayEnd.roundScores[3].winner, 'blue');
+
+  // A relay round with no submissions must not extend forever.
+  relayHost.send({ type: 'restart' });
+  await relayHost.waitFor((state) => state.phase === 'lobby');
+  relayHost.send({ type: 'start' });
+  const idleFirst = await relayHost.waitFor((state) => state.phase === 'round' && state.roundIndex === 0);
+  relayHost.send({ type: 'answer', answer: idleFirst.prompt.word });
+  const idleSecond = await relayHost.waitFor((state) => state.phase === 'round' && state.roundIndex === 1);
+  relayHost.send({ type: 'choice', choice: idleSecond.prompt.choices[0] });
+  await relayHost.waitFor((state) => state.phase === 'round' && state.roundIndex === 2);
+  relayHost.send({ type: 'answer', answer: '한글날을 맞아 우리말을 사랑해요' });
+  await relayHost.waitFor((state) => state.phase === 'round' && state.roundIndex === 3);
+  const idleEnd = await relayHost.waitFor((state) => state.phase === 'results' && state.roundIndex === 3, 8_000);
+  assert.equal(idleEnd.roundScores[3].reason, 'tiebreak');
+  assert.equal(idleEnd.roundScores[3].overtimeCount, 2);
 
   // The two players who actually type must be split across teams.
   const placementSockets = await Promise.all(Array.from({ length: 4 }, () => connect()));

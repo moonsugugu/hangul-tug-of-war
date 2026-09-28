@@ -166,12 +166,12 @@ main { width: min(1180px, calc(100% - 36px)); margin: 0 auto 60px; }
 .scene-judge-copy { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 7px 12px; border-radius: 13px; color: #fff7e8; background: rgba(157,66,54,.85); text-align: center; box-shadow: 0 5px 12px rgba(74,39,30,.16); }
 .scene-judge-copy strong { font-family: 'Jua', sans-serif; font-size: 15px; }
 .scene-judge-copy small { font-size: 9px; opacity: .9; }
-.scene-step-track { position: absolute; left: 14px; bottom: 12px; z-index: 2; display: flex; align-items: center; gap: 3px; padding: 7px 9px; border: 1px solid rgba(47,43,55,.1); border-radius: 999px; background: rgba(255,255,255,.75); }
-.scene-step-track b { color: #5c5a58; font-family: 'Jua', sans-serif; font-size: 10px; }
-.rope-step { width: 4px; height: 6px; border-radius: 3px; background: #cbbca6; opacity: .8; }
+.scene-step-track { position: absolute; left: 14px; right: 14px; bottom: 12px; z-index: 2; display: flex; align-items: center; justify-content: space-between; gap: 3px; padding: 7px 9px; border: 1px solid rgba(47,43,55,.1); border-radius: 999px; background: rgba(255,255,255,.75); }
+.scene-step-track b { flex: none; color: #5c5a58; font-family: 'Jua', sans-serif; font-size: 10px; }
+.rope-step { flex: 1 1 0; min-width: 2px; max-width: 14px; height: 6px; border-radius: 3px; background: #cbbca6; opacity: .8; }
 .rope-step.is-center { width: 6px; height: 9px; background: #7a6b5e; }
 .rope-step.is-current { width: 7px; height: 12px; background: #bd6448; box-shadow: 0 0 0 2px rgba(255,255,255,.8); opacity: 1; }
-.scene-position-label { position: absolute; right: 15px; bottom: 12px; z-index: 2; padding: 6px 9px; border: 1px solid rgba(47,43,55,.1); border-radius: 99px; color: rgba(47,43,55,.72); background: rgba(255,255,255,.68); font-size: 9px; }
+.scene-position-label { position: absolute; right: 15px; bottom: 48px; z-index: 2; padding: 6px 9px; border: 1px solid rgba(47,43,55,.1); border-radius: 99px; color: rgba(47,43,55,.72); background: rgba(255,255,255,.68); font-size: 9px; }
 .scene-accessibility { margin: 8px 3px 0; color: var(--muted); font-size: 10px; line-height: 1.5; }
 .scene-accessibility strong { color: var(--ink); margin-right: 5px; }
 .scene-fallback { min-height: 430px; display: grid; place-items: center; padding: 30px; color: var(--muted); background: linear-gradient(180deg, #d8f0ff, #f6ddb4); text-align: center; }
@@ -246,6 +246,7 @@ main { width: min(1180px, calc(100% - 36px)); margin: 0 auto 60px; }
 .relay-versus span strong { color: var(--ink); font-family: 'Jua', sans-serif; font-size: 17px; overflow-wrap: anywhere; }
 .relay-versus b { color: var(--pink); font-family: 'Jua', sans-serif; font-size: 18px; }
 .relay-sentence { border: 2px dashed #e4b18b; background: #fff6dc; font-family: 'Jua', sans-serif; }
+.relay-scoring-note { margin: -8px 0 15px; color: var(--muted); font-size: 11px; text-align: center; }
 .spectator-message { margin: 15px auto 0; color: var(--muted); font-size: 13px; }
 .intermission-card h2, .result-card h2 { margin: 18px 0 8px; font-size: 37px; }
 .intermission-card p, .result-card p { color: var(--muted); }
@@ -391,7 +392,7 @@ main { width: min(1180px, calc(100% - 36px)); margin: 0 auto 60px; }
   .arena-time strong { font-size: 18px; }
   .scene-judge-copy strong { font-size: 12px; }
   .scene-judge-copy small { font-size: 7px; }
-  .scene-position-label { right: 9px; bottom: 8px; font-size: 8px; }
+  .scene-position-label { right: 9px; bottom: 45px; font-size: 8px; }
   .tug-stage { grid-template-columns: 1fr 78px 1fr; gap: 4px; min-height: 185px; padding-left: 0; padding-right: 0; }
   .judge-avatar { width: 59px; height: 73px; }
   .judge-face { font-size: 33px; }
@@ -424,8 +425,8 @@ main { width: min(1180px, calc(100% - 36px)); margin: 0 auto 60px; }
   .scene-judge-copy small { font-size: 6px; }
   .scene-position-label { max-width: calc(100% - 18px); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
   .scene-step-track { left: 9px; right: 9px; bottom: 9px; justify-content: space-between; gap: 1px; padding: 5px 6px; }
-  .scene-step-track .rope-step { flex: 0 1 4px; min-width: 2px; }
-  .scene-position-label { right: 9px; bottom: 35px; }
+  .scene-step-track .rope-step { flex: 1 1 0; min-width: 2px; }
+  .scene-position-label { right: 9px; bottom: 44px; }
   .tug-stage { grid-template-columns: 1fr 65px 1fr; }
   .team-side__title { gap: 4px; }
   .team-side__title strong { font-size: 19px; }

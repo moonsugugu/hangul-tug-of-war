@@ -150,6 +150,7 @@ function connect() {
         message.relay?.blueId,
         message.relay?.whiteId,
         message.relay?.deadline,
+        message.prompt?.submitted,
       ].join('|');
       const promptChanged = promptKey !== lastPromptKey;
       if (promptChanged) {
@@ -198,7 +199,8 @@ function connect() {
       return;
     }
     if (message.type === 'relayAnswerResult') {
-      state.result = { correct: message.correct, score: message.correct ? 100 : 0 };
+      state.result = { correct: message.correct, score: message.score, title: message.correct ? (message.representative ? '대표 선수 점수 ×10!' : '응원 점수를 보탰어요!') : '아쉬워요, 다음 문장에서 다시 도전해요' };
+      state.draft = '';
       renderResultToast();
       return;
     }
@@ -322,10 +324,10 @@ function submitChoice(choice) {
 
 function submitRelay() {
   const prompt = state.data?.prompt;
-  if (!prompt?.selected) return;
+  if (prompt?.kind !== 'relay' || prompt.submitted) return;
   const answer = document.querySelector('#answer-input')?.value ?? state.draft;
   if (!answer.trim()) return;
-  send({ type: 'relayAnswer', answer });
+  send({ type: 'relayAnswer', answer, deadline: prompt.relayDeadline });
 }
 
 function getTimeLabel(ms) {
@@ -730,10 +732,11 @@ function renderPrompt(data) {
     const representativeName = (id) => (data.players || []).find((player) => player.id === id)?.name || '선정 중';
     return `
       <section class="prompt-card prompt-card--relay">
-        <div class="prompt-meta"><span class="round-badge">ROUND ${data.roundNumber}${data.roundNumber === 5 ? ' FINAL' : ''}</span><span class="prompt-help">${selected ? '당신이 이번 팀 대표예요!' : '랜덤 대표 선수의 대결을 지켜봐 주세요'}</span></div>
+        <div class="prompt-meta"><span class="round-badge">ROUND ${data.roundNumber}${data.roundNumber === 5 ? ' FINAL' : ''}</span><span class="prompt-help">${selected ? '당신이 이번 팀 대표예요! 점수 10배' : '대표를 응원하며 같은 문장을 입력해 주세요'}</span></div>
         <div class="relay-versus"><span>청팀 대표 <strong>${escapeHtml(representativeName(data.relay?.blueId))}</strong></span><b>VS</b><span>백팀 대표 <strong>${escapeHtml(representativeName(data.relay?.whiteId))}</strong></span></div>
         <div class="relay-sentence">${escapeHtml(prompt.prompt)}</div>
-        ${selected ? '<form id="answer-form" class="answer-form"><input id="answer-input" class="answer-input" autocomplete="off" spellcheck="false" placeholder="대표 선수만 입력할 수 있어요" /><button class="submit-button">대표 출전 <span>↗</span></button></form>' : '<div class="spectator-message">대표 선수가 문장을 입력하는 중이에요…</div>'}
+        <p class="relay-scoring-note">대표 정답 ×10 · 응원 정답 ×1 · 모두 팀 점수에 즉시 반영</p>
+        ${prompt.submitted ? '<div class="spectator-message">입력 완료! 다음 문장을 기다려 주세요.</div>' : `<form id="answer-form" class="answer-form"><input id="answer-input" class="answer-input" autocomplete="off" spellcheck="false" placeholder="문장을 똑같이 입력해 주세요" /><button class="submit-button">${selected ? '대표 출전' : '응원 보태기'} <span>↗</span></button></form>`}
       </section>
     `;
   }

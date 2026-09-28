@@ -16,6 +16,7 @@ const RELAY_LIMIT_MS = 12_000;
 const ROUND_MULTIPLIERS = [1, 1.1, 1.3, 1.5, 1.5];
 const ROUND_DURATION_MS = Number(process.env.ROUND_DURATION_MS || 180_000);
 const OVERTIME_MS = Number(process.env.OVERTIME_MS || 10_000);
+const MAX_RELAY_OVERTIMES = 2;
 const INTERMISSION_MS = Number(process.env.INTERMISSION_MS || 4_000);
 const WHEEL_DURATION_MS = Number(process.env.WHEEL_DURATION_MS || 7_000);
 const PLACEMENT_MS = Number(process.env.PLACEMENT_MS || 30_000);
@@ -521,7 +522,7 @@ const MODES = [
   { id: 'word', name: '말모이 기본전', description: '더 다양해진 순우리말을 빠르고 정확하게 입력해요.', duration: ROUND_DURATION_MS },
   { id: 'quiz', name: '뜻풀이 객관식 역전전', description: '순우리말과 한글 창제 이야기를 골라 배워요.', duration: ROUND_DURATION_MS },
   { id: 'repair', name: '바른말 수리공', description: '띄어쓰기를 제대로 해서 바른 문장을 완성해요.', duration: ROUND_DURATION_MS },
-  { id: 'relay', name: '훈민정음 랜덤 릴레이', description: '랜덤 대표 선수끼리 한글 문장으로 대결해요.', duration: ROUND_DURATION_MS },
+  { id: 'relay', name: '훈민정음 랜덤 릴레이', description: '대표는 10배 점수, 친구들은 같은 문장을 입력해 응원 점수를 보태요.', duration: ROUND_DURATION_MS },
 ];
 
 const MIME_TYPES = {
@@ -708,6 +709,7 @@ function getPromptFor(room, player) {
     return {
       kind: 'relay',
       selected: isSelected,
+      submitted: Boolean(game.relay.submissions[player.id]),
       selectedTeam: game.relay.blueId === player.id ? 'blue' : game.relay.whiteId === player.id ? 'white' : null,
       prompt: game.relay.prompt,
       relayDeadline: game.relay.deadline,
@@ -791,8 +793,8 @@ function publicStateFor(room, player) {
       whiteId: game.relay.whiteId,
       prompt: game.relay.prompt,
       deadline: game.relay.deadline,
-      blueSubmitted: Boolean(game.relay.submissions.blue),
-      whiteSubmitted: Boolean(game.relay.submissions.white),
+      blueSubmitted: Boolean(game.relay.submissions[game.relay.blueId]),
+      whiteSubmitted: Boolean(game.relay.submissions[game.relay.whiteId]),
       lastResult: game.relay.lastResult || null,
     } : null,
   };
@@ -903,21 +905,22 @@ function finishRound(room, reason = 'time') {
   if (game.phase !== 'round') return;
   const bluePoints = Math.round(game.scores.blue);
   const whitePoints = Math.round(game.scores.white);
-  if (bluePoints === whitePoints) {
+  const relayTiebreak = bluePoints === whitePoints && game.mode === 'relay' && game.overtimeCount >= MAX_RELAY_OVERTIMES;
+  if (bluePoints === whitePoints && !relayTiebreak) {
     game.overtimeCount += 1;
     game.roundEndsAt = Date.now() + OVERTIME_MS;
     game.notice = `동점! ${Math.round(OVERTIME_MS / 1000)}초 연장전이 시작됩니다.`;
     broadcast(room);
     return;
   }
-  const winner = bluePoints > whitePoints ? 'blue' : 'white';
+  const winner = relayTiebreak ? (Math.random() < 0.5 ? 'blue' : 'white') : bluePoints > whitePoints ? 'blue' : 'white';
   const roundScore = {
     round: game.roundIndex + 1,
     mode: getMode(room)?.name || '',
     blue: bluePoints,
     white: whitePoints,
     winner,
-    reason,
+    reason: relayTiebreak ? 'tiebreak' : reason,
     overtimeCount: game.overtimeCount,
   };
   game.roundScores.push(roundScore);
@@ -945,7 +948,9 @@ function finishRound(room, reason = 'time') {
 
   game.phase = 'intermission';
   game.intermissionUntil = Date.now() + INTERMISSION_MS;
-  game.notice = `${game.roundIndex + 1}라운드 ${winner === 'blue' ? '청팀' : '백팀'} 승리! 다음 라운드를 준비하세요.`;
+  game.notice = relayTiebreak
+    ? `연장 2회 후에도 동점이라 추첨으로 ${winner === 'blue' ? '청팀' : '백팀'}이 승리했어요. 다음 라운드를 준비하세요.`
+    : `${game.roundIndex + 1}라운드 ${winner === 'blue' ? '청팀' : '백팀'} 승리! 다음 라운드를 준비하세요.`;
   broadcast(room);
 }
 
@@ -997,25 +1002,17 @@ function startRelayDuel(room) {
 function finishRelayDuel(room) {
   const game = room.game;
   const relay = game.relay;
-  if (!relay || relay.lastResult) return;
+  if (game.phase !== 'round' || !relay || relay.lastResult) return;
 
-  const blue = relay.submissions.blue;
-  const white = relay.submissions.white;
-  const blueScore = blue?.exact ? Math.max(0, 60 + Math.min(40, 40 * (1 - blue.elapsedMs / RELAY_LIMIT_MS))) : 0;
-  const whiteScore = white?.exact ? Math.max(0, 60 + Math.min(40, 40 * (1 - white.elapsedMs / RELAY_LIMIT_MS))) : 0;
-
-  creditPlayer(room.players.get(relay.blueId), blueScore);
-  creditPlayer(room.players.get(relay.whiteId), whiteScore);
-  if (blueScore) addTeamScore(room, 'blue', blueScore, false);
-  if (whiteScore) addTeamScore(room, 'white', whiteScore, false);
-  checkRopeWin(room);
+  const blueScore = Object.values(relay.submissions).filter((entry) => entry.team === 'blue').reduce((sum, entry) => sum + entry.score, 0);
+  const whiteScore = Object.values(relay.submissions).filter((entry) => entry.team === 'white').reduce((sum, entry) => sum + entry.score, 0);
 
   const winner = blueScore === whiteScore ? 'draw' : blueScore > whiteScore ? 'blue' : 'white';
   relay.lastResult = { winner, blueScore, whiteScore };
   broadcast(room);
 
   setTimeout(() => {
-    if (rooms.get(room.id) === room && game.phase === 'round' && game.mode === 'relay') startRelayDuel(room);
+    if (rooms.get(room.id) === room && game.phase === 'round' && game.mode === 'relay' && game.relay === relay) startRelayDuel(room);
   }, 1_800);
 }
 
@@ -1145,23 +1142,30 @@ function handleChoice(player, choice) {
   broadcast(room);
 }
 
-function handleRelayAnswer(player, answer) {
+function handleRelayAnswer(player, answer, deadline) {
   const room = getRoomForPlayer(player);
   if (!room) return;
   const game = room.game;
   const relay = game.relay;
   if (game.phase !== 'round' || game.mode !== 'relay' || !relay) return;
   if (Date.now() >= game.roundEndsAt) return finishRound(room);
+  if (Date.now() >= relay.deadline) return finishRelayDuel(room);
+  if (deadline !== relay.deadline) return;
   const team = relay.blueId === player.id ? 'blue' : relay.whiteId === player.id ? 'white' : null;
-  if (!team || relay.submissions[team]) return;
+  if (!player.team || player.spectator || relay.submissions[player.id] || relay.lastResult) return;
 
   const elapsedMs = Date.now() - relay.startedAt;
-  relay.submissions[team] = {
-    exact: normalizeSentence(answer) === normalizeSentence(relay.prompt),
-    elapsedMs,
-  };
-  send(player.ws, { type: 'relayAnswerResult', correct: relay.submissions[team].exact });
-  if (relay.submissions.blue && relay.submissions.white) finishRelayDuel(room);
+  const exact = normalizeSentence(answer) === normalizeSentence(relay.prompt);
+  const baseScore = exact ? Math.max(0, 60 + Math.min(40, 40 * (1 - elapsedMs / RELAY_LIMIT_MS))) : 0;
+  const score = baseScore * (team ? 10 : 1);
+  relay.submissions[player.id] = { team: player.team, exact, score };
+  send(player.ws, { type: 'relayAnswerResult', correct: exact, score, representative: Boolean(team) });
+  if (score) {
+    creditPlayer(player, score);
+    addTeamScore(room, player.team, score);
+  }
+  if (game.phase !== 'round') return;
+  if (getActivePlayers(room).every((entry) => relay.submissions[entry.id])) finishRelayDuel(room);
   else broadcast(room);
 }
 
@@ -1288,7 +1292,7 @@ function handleMessage(ws, rawMessage) {
   if (message.type === 'restart') return resetToLobby(player);
   if (message.type === 'answer') return handleTypedAnswer(player, message.answer);
   if (message.type === 'choice') return handleChoice(player, message.choice);
-  if (message.type === 'relayAnswer') return handleRelayAnswer(player, message.answer);
+  if (message.type === 'relayAnswer') return handleRelayAnswer(player, message.answer, message.deadline);
 }
 
 function tick() {
