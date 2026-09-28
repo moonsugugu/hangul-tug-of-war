@@ -5,6 +5,7 @@ const LOOKAHEAD_SECONDS = 0.2;
 
 let context;
 let master;
+let effects;
 let noiseBuffer;
 let scheduler;
 let nextStepTime = 0;
@@ -92,21 +93,72 @@ function schedule() {
   }
 }
 
-export async function startBgm() {
+function ensureAudioContext() {
   const AudioContextClass = window.AudioContext || window.webkitAudioContext;
   if (!AudioContextClass) return false;
   if (!context || context.state === 'closed') {
-    context = new AudioContextClass();
-    master = context.createGain();
-    master.gain.value = 0.001;
-    master.connect(context.destination);
-    noiseBuffer = createNoiseBuffer();
+    try {
+      context = new AudioContextClass();
+      master = context.createGain();
+      master.gain.value = 0.001;
+      master.connect(context.destination);
+      effects = context.createGain();
+      effects.gain.value = 0.36;
+      effects.connect(context.destination);
+      noiseBuffer = createNoiseBuffer();
+    } catch {
+      return false;
+    }
   }
+  return true;
+}
+
+export async function unlockSoundEffects() {
+  if (!ensureAudioContext()) return false;
   try {
     await context.resume();
   } catch {
     return false;
   }
+  return context.state === 'running';
+}
+
+export async function playVictorySound() {
+  if (!await unlockSoundEffects()) return false;
+  const now = context.currentTime + 0.025;
+  [523.25, 659.25, 783.99, 1046.5].forEach((frequency, index) => {
+    const at = now + index * 0.13;
+    const oscillator = context.createOscillator();
+    const gain = context.createGain();
+    oscillator.type = 'triangle';
+    oscillator.frequency.setValueAtTime(frequency, at);
+    gain.gain.setValueAtTime(0.001, at);
+    gain.gain.exponentialRampToValueAtTime(0.15, at + 0.015);
+    gain.gain.exponentialRampToValueAtTime(0.001, at + 0.34);
+    oscillator.connect(gain).connect(effects);
+    oscillator.start(at);
+    oscillator.stop(at + 0.35);
+    oscillator.onended = () => { oscillator.disconnect(); gain.disconnect(); };
+  });
+  for (const offset of [0, 0.26, 0.52]) {
+    const source = context.createBufferSource();
+    const filter = context.createBiquadFilter();
+    const gain = context.createGain();
+    source.buffer = noiseBuffer;
+    filter.type = 'highpass';
+    filter.frequency.value = 1800;
+    gain.gain.setValueAtTime(0.065, now + offset);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + offset + 0.13);
+    source.connect(filter).connect(gain).connect(effects);
+    source.start(now + offset);
+    source.stop(now + offset + 0.14);
+    source.onended = () => { source.disconnect(); filter.disconnect(); gain.disconnect(); };
+  }
+  return true;
+}
+
+export async function startBgm() {
+  if (!await unlockSoundEffects()) return false;
   if (scheduler) return true;
   master.gain.setTargetAtTime(0.18, context.currentTime, 0.04);
   nextStepTime = context.currentTime + 0.06;

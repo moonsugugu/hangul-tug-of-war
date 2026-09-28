@@ -1,6 +1,6 @@
 import './styles.css';
 import { mountTugScene } from './tugScene.js';
-import { startBgm, stopBgm } from './bgm.js';
+import { startBgm, stopBgm, unlockSoundEffects, playVictorySound } from './bgm.js';
 import QRCode from 'qrcode';
 
 const app = document.querySelector('#app');
@@ -23,6 +23,7 @@ let socket;
 let lastViewKey = '';
 let lastPromptKey = '';
 let tugScene = null;
+let lastCelebrationKey = '';
 let isComposing = false;
 let pendingRender = null;
 let pendingDraftReset = false;
@@ -66,6 +67,29 @@ const modeLabels = {
   repair: '바른말 수리공',
   relay: '훈민정음 랜덤 릴레이',
 };
+
+const roundGuides = {
+  word: '화면에 나온 순우리말을 정확히 입력하세요. 정확하고 빠를수록 줄을 더 당깁니다.',
+  quiz: '뜻을 읽고 알맞은 낱말이나 한글 창제 정답을 고르세요.',
+  repair: '잘못 붙은 문장을 올바르게 띄어 써서 입력하세요.',
+  relay: '대표가 정답을 맞히면 줄이 2칸 움직여요. 친구들은 같은 문장을 입력해 1점씩 보태고, 제한시간까지 대표가 계속 바뀝니다.',
+};
+
+function winningTeamForCelebration(data) {
+  if (!['intermission', 'wheel', 'results'].includes(data.phase)) return null;
+  const lastRound = data.roundScores?.at(-1);
+  if (lastRound?.round !== data.roundNumber) return null;
+  return data.phase === 'results' ? data.winner : lastRound.winner;
+}
+
+function celebrateWinIfNeeded(data) {
+  const winner = winningTeamForCelebration(data);
+  if (!winner) return;
+  const key = `${data.roomId}:${data.roundNumber}:${winner}`;
+  if (key === lastCelebrationKey) return;
+  lastCelebrationKey = key;
+  void playVictorySound().catch(() => {});
+}
 
 const roundModes = [
   { id: 'word' },
@@ -132,6 +156,7 @@ function connect() {
       state.roomUrl = message.roomUrl || state.roomUrl;
       state.data = message;
       state.joined = Boolean(message.self);
+      celebrateWinIfNeeded(message);
       trackScoreFlashes(message.players);
       updateDynamic();
       // The page (and its 3D arena) is rebuilt only when the page itself changes;
@@ -199,13 +224,19 @@ function connect() {
       return;
     }
     if (message.type === 'relayAnswerResult') {
-      state.result = { correct: message.correct, score: message.score, title: message.correct ? (message.representative ? '대표 선수 점수 ×10!' : '응원 점수를 보탰어요!') : '아쉬워요, 다음 문장에서 다시 도전해요' };
+      state.result = { correct: message.correct, score: message.score, title: message.correct ? (message.representative ? '대표 정답! 줄 2칸 이동!' : '응원 점수 +1점!') : '아쉬워요, 다음 문장에서 다시 도전해요' };
       state.draft = '';
       renderResultToast();
       return;
     }
     if (message.type === 'timeoutScore') {
-      state.result = { correct: true, score: message.score, title: '시간 종료! 입력한 만큼 부분 점수' };
+      state.result = {
+        correct: true,
+        score: message.score,
+        title: message.relay
+          ? message.representative ? '시간 종료! 대표가 쓴 만큼 줄을 당겨요' : '시간 종료! 응원 부분 점수'
+          : '시간 종료! 입력한 만큼 부분 점수',
+      };
       state.draft = '';
       renderResultToast();
       return;
@@ -398,7 +429,7 @@ function renderHeader() {
       <a class="brand-mark" href="/" aria-label="말모이 줄다리기 홈">
         <span class="brand-mark__seal">한</span>
         <span>
-          <span class="brand-mark__title"><strong>말모이 줄다리기</strong><span class="brand-mark__version">ver.1.0.1</span></span>
+          <span class="brand-mark__title"><strong>말모이 줄다리기</strong><span class="brand-mark__version">ver.1.0.3</span></span>
           <small>한글날 기념 타자 대전</small>
         </span>
       </a>
@@ -614,18 +645,21 @@ function renderTeamReveal(data) {
 function renderScoreboard(data) {
   const mine = (team) => (data.self?.team === team ? ' is-mine' : '');
   const mineTag = (team) => (data.self?.team === team ? '<span class="mine-tag">우리 팀</span>' : '');
+  const scoringRule = (team) => data.mode?.id === 'relay'
+    ? '대표 정답 2칸 · 응원 정답 1점'
+    : `인원 보정 ×${data.multipliers[team].toFixed(2)}`;
   return `
     <div class="scoreboard">
       <div class="score-card score-card--blue${mine('blue')}">
         <div class="score-card__label"><span class="dot"></span> 청팀 <small id="blue-count">${data.counts.blue}명</small>${mineTag('blue')}</div>
         <strong id="blue-score">${formatScore(data.scores.blue)}</strong>
-        <small class="multiplier" id="blue-multiplier">인원 보정 ×${data.multipliers.blue.toFixed(2)}</small><span class="round-wins" id="blue-wins">라운드 ${data.roundWins?.blue || 0}승</span>
+        <small class="multiplier" id="blue-multiplier">${scoringRule('blue')}</small><span class="round-wins" id="blue-wins">라운드 ${data.roundWins?.blue || 0}승</span>
       </div>
       <div class="score-vs">VS</div>
       <div class="score-card score-card--white${mine('white')}">
         <div class="score-card__label"><span class="dot"></span> 백팀 <small id="white-count">${data.counts.white}명</small>${mineTag('white')}</div>
         <strong id="white-score">${formatScore(data.scores.white)}</strong>
-        <small class="multiplier" id="white-multiplier">인원 보정 ×${data.multipliers.white.toFixed(2)}</small><span class="round-wins" id="white-wins">라운드 ${data.roundWins?.white || 0}승</span>
+        <small class="multiplier" id="white-multiplier">${scoringRule('white')}</small><span class="round-wins" id="white-wins">라운드 ${data.roundWins?.white || 0}승</span>
       </div>
     </div>
   `;
@@ -638,6 +672,8 @@ function renderArena(data) {
   const bluePlayers = data.players?.filter((player) => player.team === 'blue') || [];
   const whitePlayers = data.players?.filter((player) => player.team === 'white') || [];
   const crowded = bluePlayers.length + whitePlayers.length > 8;
+  const victoryTeam = winningTeamForCelebration(data);
+  const fireworks = victoryTeam ? Array.from({ length: 4 }, (_, burst) => `<span class="firework firework--${burst}" aria-hidden="true">${Array.from({ length: 12 }, (_, ray) => `<i style="--ray:${ray}"></i>`).join('')}</span>`).join('') : '';
   return `
     <section class="arena-card">
       <div class="arena-topline"><span><b>세종대왕님</b>이 공정하게 심판해요 <em class="overtime-badge" id="overtime-badge" ${data.overtimeCount ? '' : 'hidden'}>연장전 ${data.overtimeCount}</em></span></div>
@@ -646,11 +682,13 @@ function renderArena(data) {
         <div class="scene-overlay">
           <span class="scene-team-tag scene-team-tag--blue" aria-hidden="true">청팀 · ${data.counts.blue}명</span>
           <div class="scene-judge-stack">
-            <div class="arena-time" role="timer"><small>${data.phase === 'round' ? `${data.roundNumber}라운드 남은 시간` : data.phase === 'intermission' ? '다음 라운드까지' : data.phase === 'wheel' ? '결승 준비' : '경기 종료'}</small><strong id="arena-time">${data.phase === 'round' ? getTimeLabel(data.timeRemainingMs) : data.phase === 'intermission' ? getTimeLabel(data.intermissionRemainingMs) : data.phase === 'wheel' ? getTimeLabel(data.wheelRemainingMs) : '완료'}</strong></div>
+            <div class="arena-time" role="timer"><small>${data.phase === 'round' ? `${data.roundNumber}라운드 남은 시간` : data.phase === 'roundIntro' ? '라운드 시작까지' : data.phase === 'intermission' ? '다음 라운드까지' : data.phase === 'wheel' ? '결승 준비' : '경기 종료'}</small><strong id="arena-time">${data.phase === 'round' ? getTimeLabel(data.timeRemainingMs) : data.phase === 'roundIntro' ? getTimeLabel(data.roundIntroRemainingMs) : data.phase === 'intermission' ? getTimeLabel(data.intermissionRemainingMs) : data.phase === 'wheel' ? getTimeLabel(data.wheelRemainingMs) : '완료'}</strong></div>
             <div class="scene-judge-copy" aria-hidden="true"><strong>한글 사랑해요</strong><small>세종대왕님 감사해요</small></div>
           </div>
           <span class="scene-team-tag scene-team-tag--white" aria-hidden="true">백팀 · ${data.counts.white}명</span>
         </div>
+        ${data.phase === 'roundIntro' ? `<div class="round-intro-overlay" role="status"><span>${data.roundNumber === 5 ? '결승' : `${data.roundNumber}라운드`} 시작 안내</span><h2>${escapeHtml(data.mode?.name || '')}</h2><p>${escapeHtml(roundGuides[data.mode?.id] || data.mode?.description || '')}</p><strong><span class="intro-time">${getTimeLabel(data.roundIntroRemainingMs)}</span> 뒤 시작!</strong></div>` : ''}
+        ${victoryTeam ? `<div class="victory-celebration victory-celebration--${victoryTeam}" role="status">${fireworks}<strong>${teamName(victoryTeam)} 승리! 🎉</strong></div>` : ''}
         <div class="scene-step-track" aria-hidden="true"><b>청</b>${Array.from({ length: maxSteps * 2 + 1 }, (_, index) => `<i class="rope-step ${index === maxSteps ? 'is-center' : ''} ${index === maxSteps + ropeStep ? 'is-current' : ''}" data-rope-tick="${index}"></i>`).join('')}<b>백</b></div>
         <div class="scene-position-label" aria-live="polite">${getRopeStepLabel(data)}</div>
       </div>
@@ -660,7 +698,7 @@ function renderArena(data) {
 }
 
 function getRopeMaxSteps(data) {
-  return Math.max(1, Number(data.ropeMaxSteps) || 15);
+  return Math.max(1, Number(data.ropeMaxSteps) || 20);
 }
 
 function getRopeStep(data) {
@@ -695,6 +733,9 @@ async function toggleBgm() {
 }
 
 function renderPrompt(data) {
+  if (data.phase === 'roundIntro') {
+    return `<section class="prompt-card round-intro-card"><span class="round-badge">${data.roundNumber === 5 ? 'FINAL ROUND' : `ROUND ${data.roundNumber}`}</span><h2>${escapeHtml(data.mode?.name || '')}</h2><p>${escapeHtml(roundGuides[data.mode?.id] || data.mode?.description || '')}</p><div class="next-countdown"><span class="intro-time">${getTimeLabel(data.roundIntroRemainingMs)}</span> 뒤 시작해요!</div></section>`;
+  }
   if (data.phase === 'wheel') {
     const selected = Number(data.wheelSelectedIndex ?? 0);
     return `<section class="prompt-card wheel-card" style="--wheel-turns:${1440 - selected * 90}deg;--wheel-duration:${Math.round(Number(data.wheelDurationMs || 7000) * .65)}ms"><span class="round-badge">FINAL ROUND</span><h2>2:2 동점! 결승 종목 돌림판</h2><p>1~4라운드 중 하나를 다시 겨뤄 최종 승자를 정해요.</p><div class="wheel-wrap"><div class="wheel-pointer" aria-hidden="true"></div><div class="game-wheel"><span>말모이</span><span>뜻풀이</span><span>바른말</span><span>릴레이</span></div></div><p class="wheel-countdown">결승까지 <span id="wheel-time">${getTimeLabel(data.wheelRemainingMs)}</span></p><p class="wheel-result">선정 종목: <strong>${escapeHtml(modeLabels[roundModes[selected]?.id] || '')}</strong></p></section>`;
@@ -751,10 +792,10 @@ function renderPrompt(data) {
     const representativeName = (id) => (data.players || []).find((player) => player.id === id)?.name || '선정 중';
     return `
       <section class="prompt-card prompt-card--relay">
-        <div class="prompt-meta"><span class="round-badge">ROUND ${data.roundNumber}${data.roundNumber === 5 ? ' FINAL' : ''}</span><span class="prompt-help">${selected ? '당신이 이번 팀 대표예요! 점수 10배' : '대표를 응원하며 같은 문장을 입력해 주세요'}</span></div>
+        <div class="prompt-meta"><span class="round-badge">ROUND ${data.roundNumber}${data.roundNumber === 5 ? ' FINAL' : ''}</span><span class="prompt-help">${selected ? '당신이 이번 팀 대표예요! 정답이면 줄 2칸 이동' : '대표를 응원하며 같은 문장을 입력하면 1점'}</span></div>
         <div class="relay-versus"><span>청팀 대표 <strong>${escapeHtml(representativeName(data.relay?.blueId))}</strong></span><b>VS</b><span>백팀 대표 <strong>${escapeHtml(representativeName(data.relay?.whiteId))}</strong></span></div>
         <div class="relay-sentence">${escapeHtml(prompt.prompt)}</div>
-        <p class="relay-scoring-note">대표 정답 ×10 · 응원 정답 ×1 · 모두 팀 점수에 즉시 반영</p>
+        <p class="relay-scoring-note">대표 정답: 줄 2칸 이동 · 응원 정답: 1점 · 제한시간까지 대표가 계속 바뀌어요</p>
         ${prompt.submitted ? '<div class="spectator-message">입력 완료! 다음 문장을 기다려 주세요.</div>' : `<form id="answer-form" class="answer-form"><input id="answer-input" class="answer-input" autocomplete="off" spellcheck="false" placeholder="문장을 똑같이 입력해 주세요" /><button class="submit-button">${selected ? '대표 출전' : '응원 보태기'} <span>↗</span></button></form>`}
       </section>
     `;
@@ -889,7 +930,8 @@ function updateDynamic() {
   const data = state.data;
   if (!data) return;
   const time = document.querySelector('#arena-time');
-  if (time) time.textContent = data.phase === 'round' ? getTimeLabel(data.timeRemainingMs) : data.phase === 'intermission' ? getTimeLabel(data.intermissionRemainingMs) : data.phase === 'wheel' ? getTimeLabel(data.wheelRemainingMs) : '완료';
+  if (time) time.textContent = data.phase === 'round' ? getTimeLabel(data.timeRemainingMs) : data.phase === 'roundIntro' ? getTimeLabel(data.roundIntroRemainingMs) : data.phase === 'intermission' ? getTimeLabel(data.intermissionRemainingMs) : data.phase === 'wheel' ? getTimeLabel(data.wheelRemainingMs) : '완료';
+  document.querySelectorAll('.intro-time').forEach((introTime) => { introTime.textContent = getTimeLabel(data.roundIntroRemainingMs); });
   const overtimeBadge = document.querySelector('#overtime-badge');
   if (overtimeBadge) { overtimeBadge.hidden = !data.overtimeCount; overtimeBadge.textContent = `연장전 ${data.overtimeCount || 0}`; }
   const blueScore = document.querySelector('#blue-score');
@@ -905,8 +947,11 @@ function updateDynamic() {
   if (whiteScore) whiteScore.textContent = formatScore(data.scores?.white);
   if (blueCount) blueCount.textContent = `${data.counts?.blue || 0}명`;
   if (whiteCount) whiteCount.textContent = `${data.counts?.white || 0}명`;
-  if (blueMultiplier) blueMultiplier.textContent = `인원 보정 ×${Number(data.multipliers?.blue || 1).toFixed(2)}`;
-  if (whiteMultiplier) whiteMultiplier.textContent = `인원 보정 ×${Number(data.multipliers?.white || 1).toFixed(2)}`;
+  const scoringRule = (team) => data.mode?.id === 'relay'
+    ? '대표 정답 2칸 · 응원 정답 1점'
+    : `인원 보정 ×${Number(data.multipliers?.[team] || 1).toFixed(2)}`;
+  if (blueMultiplier) blueMultiplier.textContent = scoringRule('blue');
+  if (whiteMultiplier) whiteMultiplier.textContent = scoringRule('white');
   if (blueWins) blueWins.textContent = `라운드 ${data.roundWins?.blue || 0}승`;
   if (whiteWins) whiteWins.textContent = `라운드 ${data.roundWins?.white || 0}승`;
   const wheelTime = document.querySelector('#wheel-time');
@@ -946,6 +991,9 @@ function renderResultToast() {
     state.result = null;
   }, 2_200);
 }
+
+document.addEventListener('pointerdown', () => { void unlockSoundEffects(); }, { once: true });
+document.addEventListener('keydown', () => { void unlockSoundEffects(); }, { once: true });
 
 connect();
 render();

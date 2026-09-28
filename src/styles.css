@@ -174,6 +174,25 @@ main { width: min(1180px, calc(100% - 36px)); margin: 0 auto 60px; }
 .rope-step.is-center { width: 6px; height: 9px; background: #7a6b5e; }
 .rope-step.is-current { width: 7px; height: 12px; background: #bd6448; box-shadow: 0 0 0 2px rgba(255,255,255,.8); opacity: 1; }
 .scene-position-label { position: absolute; right: 15px; bottom: 48px; z-index: 2; padding: 6px 9px; border: 1px solid rgba(47,43,55,.1); border-radius: 99px; color: rgba(47,43,55,.72); background: rgba(255,255,255,.68); font-size: 9px; }
+.round-intro-overlay { position: absolute; inset: 0; z-index: 4; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; padding: 70px 22px 55px; color: #362c34; background: rgba(255,248,229,.94); text-align: center; }
+.round-intro-overlay > span { color: #aa614d; font-size: 12px; font-weight: 700; letter-spacing: .12em; }
+.round-intro-overlay h2 { margin: 0; font-family: 'Jua', sans-serif; font-size: clamp(26px, 5vw, 48px); font-weight: 400; }
+.round-intro-overlay p { max-width: 660px; margin: 0; font-size: clamp(12px, 2vw, 17px); line-height: 1.5; }
+.round-intro-overlay > strong { margin-top: 8px; padding: 7px 16px; border-radius: 99px; color: white; background: var(--blue-dark); font-family: 'Jua', sans-serif; font-size: 18px; font-weight: 400; }
+.victory-celebration { position: absolute; inset: 0; z-index: 4; display: grid; place-items: center; overflow: hidden; pointer-events: none; background: radial-gradient(circle, rgba(255,248,216,.78), rgba(255,255,255,.08) 60%); animation: victory-fade 3.5s ease-out forwards; }
+.victory-celebration strong { position: relative; z-index: 2; padding: 12px 24px; border: 3px solid white; border-radius: 99px; color: white; background: var(--blue-dark); box-shadow: 0 8px 25px rgba(36,35,56,.25); font-family: 'Jua', sans-serif; font-size: clamp(25px, 5vw, 44px); font-weight: 400; }
+.victory-celebration--white strong { color: #6a421d; background: var(--yellow); }
+.firework { position: absolute; width: 1px; height: 1px; }
+.firework--0 { left: 19%; top: 34%; --delay: 0s; }
+.firework--1 { left: 79%; top: 25%; --delay: .35s; }
+.firework--2 { left: 26%; top: 75%; --delay: .65s; }
+.firework--3 { left: 78%; top: 72%; --delay: .95s; }
+.firework i { position: absolute; left: 0; top: 0; width: 5px; height: 15px; border-radius: 99px; background: #f7c641; opacity: 0; animation: firework-burst 1.5s ease-out var(--delay) both; }
+.firework i:nth-child(3n) { background: #ed6672; }
+.firework i:nth-child(3n + 1) { background: #5e9de8; }
+@keyframes firework-burst { 0% { opacity: 0; transform: rotate(calc(var(--ray) * 30deg)) translateY(0) scale(.3); } 18% { opacity: 1; } 70% { opacity: 1; transform: rotate(calc(var(--ray) * 30deg)) translateY(-70px) scale(1); } 100% { opacity: 0; transform: rotate(calc(var(--ray) * 30deg)) translateY(-88px) scale(.4); } }
+@keyframes victory-fade { 0%, 65% { opacity: 1; } 100% { opacity: 0; visibility: hidden; } }
+@media (prefers-reduced-motion: reduce) { .firework { display: none; } .victory-celebration { animation: none; background: transparent; } }
 .scene-accessibility { margin: 8px 3px 0; color: var(--muted); font-size: 10px; line-height: 1.5; }
 .scene-accessibility strong { color: var(--ink); margin-right: 5px; }
 .scene-fallback { min-height: 430px; display: grid; place-items: center; padding: 30px; color: var(--muted); background: linear-gradient(180deg, #d8f0ff, #f6ddb4); text-align: center; }
@@ -250,6 +269,9 @@ main { width: min(1180px, calc(100% - 36px)); margin: 0 auto 60px; }
 .relay-sentence { border: 2px dashed #e4b18b; background: #fff6dc; font-family: 'Jua', sans-serif; }
 .relay-scoring-note { margin: -8px 0 15px; color: var(--muted); font-size: 11px; text-align: center; }
 .spectator-message { margin: 15px auto 0; color: var(--muted); font-size: 13px; }
+.round-intro-card { border-color: #c5d5ff; background: #f4f7ff; }
+.round-intro-card h2 { margin: 14px 0 6px; font-size: clamp(27px, 5vw, 45px); }
+.round-intro-card p { max-width: 680px; margin: 0 auto; line-height: 1.6; }
 .intermission-card h2, .result-card h2 { margin: 18px 0 8px; font-size: 37px; }
 .intermission-card p, .result-card p { color: var(--muted); }
 .next-countdown { margin-top: 20px; color: var(--blue); font-family: 'Jua', sans-serif; font-size: 27px; }

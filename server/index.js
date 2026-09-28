@@ -13,15 +13,17 @@ const PORT = Number(process.env.PORT || 8787);
 const PUBLIC_BASE_URL = String(process.env.PUBLIC_BASE_URL || '').replace(/\/+$/, '');
 const REFERENCE_CPM = 120;
 const RELAY_LIMIT_MS = 12_000;
+const RELAY_DUEL_PAUSE_MS = Number(process.env.RELAY_DUEL_PAUSE_MS ?? 1_800);
 const ROUND_MULTIPLIERS = [1, 1.1, 1.3, 1.5, 1.5];
 const ROUND_DURATION_MS = Number(process.env.ROUND_DURATION_MS || 180_000);
+const ROUND_INTRO_MS = Number(process.env.ROUND_INTRO_MS ?? 5_000);
 const OVERTIME_MS = Number(process.env.OVERTIME_MS || 10_000);
 const MAX_RELAY_OVERTIMES = 2;
 const INTERMISSION_MS = Number(process.env.INTERMISSION_MS || 4_000);
 const WHEEL_DURATION_MS = Number(process.env.WHEEL_DURATION_MS || 7_000);
 const PLACEMENT_MS = Number(process.env.PLACEMENT_MS || 30_000);
 const TEAM_REVEAL_MS = Number(process.env.TEAM_REVEAL_MS || 7_000);
-const ROPE_MAX_STEPS = 15;
+const ROPE_MAX_STEPS = 20;
 const ROPE_POINTS_PER_STEP = 75;
 const MAX_PLAYERS_PER_ROOM = 30;
 const CHARACTER_IDS = ['rabbit', 'bear', 'cat', 'chick', 'panda', 'sheep', 'fox', 'penguin'];
@@ -371,12 +373,37 @@ function currentPracticePrompt(progress) {
 // does not crowd those questions out.
 function currentQuizPrompt(progress) {
   const position = progress.promptIndex;
+  let id;
+  let prompt;
   if (position % 3 === 2) {
     const index = deckIndex(progress, 'hangul', HANGUL_CREATION_QUIZ_PROMPTS.length, Math.floor(position / 3));
-    return { id: `quiz-${position}-hangul-${index}`, prompt: HANGUL_CREATION_QUIZ_PROMPTS[index] };
+    id = `quiz-${position}-hangul-${index}`;
+    prompt = HANGUL_CREATION_QUIZ_PROMPTS[index];
+  } else {
+    const index = deckIndex(progress, 'wordQuiz', WORD_QUIZ_PROMPTS.length, position - Math.floor(position / 3));
+    id = `quiz-${position}-word-${index}`;
+    prompt = WORD_QUIZ_PROMPTS[index];
   }
-  const index = deckIndex(progress, 'wordQuiz', WORD_QUIZ_PROMPTS.length, position - Math.floor(position / 3));
-  return { id: `quiz-${position}-word-${index}`, prompt: WORD_QUIZ_PROMPTS[index] };
+
+  // Keep each question's randomized choices stable across frequent state broadcasts,
+  // and avoid putting the answer in the same position twice in a row.
+  if (progress.quizChoicePromptId !== id) {
+    const choices = [...prompt.choices];
+    for (let index = choices.length - 1; index > 0; index -= 1) {
+      const swap = Math.floor(Math.random() * (index + 1));
+      [choices[index], choices[swap]] = [choices[swap], choices[index]];
+    }
+    let answerIndex = choices.indexOf(prompt.answer);
+    if (choices.length > 1 && answerIndex === progress.lastQuizAnswerIndex) {
+      const swapIndex = (answerIndex + 1 + Math.floor(Math.random() * (choices.length - 1))) % choices.length;
+      [choices[answerIndex], choices[swapIndex]] = [choices[swapIndex], choices[answerIndex]];
+      answerIndex = swapIndex;
+    }
+    progress.quizChoicePromptId = id;
+    progress.quizChoices = choices;
+    progress.lastQuizAnswerIndex = answerIndex;
+  }
+  return { id, prompt: { ...prompt, choices: progress.quizChoices } };
 }
 
 function currentPlacementPrompt(progress) {
@@ -522,7 +549,7 @@ const MODES = [
   { id: 'word', name: '말모이 기본전', description: '더 다양해진 순우리말을 빠르고 정확하게 입력해요.', duration: ROUND_DURATION_MS },
   { id: 'quiz', name: '뜻풀이 객관식 역전전', description: '순우리말과 한글 창제 이야기를 골라 배워요.', duration: ROUND_DURATION_MS },
   { id: 'repair', name: '바른말 수리공', description: '띄어쓰기를 제대로 해서 바른 문장을 완성해요.', duration: ROUND_DURATION_MS },
-  { id: 'relay', name: '훈민정음 랜덤 릴레이', description: '대표는 10배 점수, 친구들은 같은 문장을 입력해 응원 점수를 보태요.', duration: ROUND_DURATION_MS },
+  { id: 'relay', name: '훈민정음 랜덤 릴레이', description: '대표가 정답을 맞히면 줄을 2칸 당기고, 친구들의 정답은 1점씩 보태요.', duration: ROUND_DURATION_MS },
 ];
 
 const MIME_TYPES = {
@@ -545,6 +572,7 @@ function createGame() {
     mode: null,
     roundStartedAt: 0,
     roundEndsAt: 0,
+    roundIntroUntil: 0,
     intermissionUntil: 0,
     wheelEndsAt: 0,
     wheelSelectedIndex: null,
@@ -725,7 +753,7 @@ function publicStateFor(room, player) {
   const multipliers = getMultipliers(room);
   const difference = game.scores.blue - game.scores.white;
   // One visible step is roughly one accurate answer. Either team can pull the
-  // center marker through all fifteen steps, even if the other team has no score.
+  // center marker through all twenty steps, even if the other team has no score.
   const ropeStep = Math.max(-ROPE_MAX_STEPS, Math.min(ROPE_MAX_STEPS, -Math.round(difference / ROPE_POINTS_PER_STEP)));
   const ropePosition = 50 + ropeStep * (43 / ROPE_MAX_STEPS);
   const mode = getMode(room);
@@ -743,6 +771,8 @@ function publicStateFor(room, player) {
     totalRounds: MODES.length + 1,
     mode: mode ? { ...mode } : null,
     timeRemainingMs: game.phase === 'round' ? Math.max(0, game.roundEndsAt - Date.now()) : 0,
+    roundIntroRemainingMs: game.phase === 'roundIntro' ? Math.max(0, game.roundIntroUntil - Date.now()) : 0,
+    roundIntroDurationMs: ROUND_INTRO_MS,
     intermissionRemainingMs: game.phase === 'intermission' ? Math.max(0, game.intermissionUntil - Date.now()) : 0,
     wheelRemainingMs: game.phase === 'wheel' ? Math.max(0, game.wheelEndsAt - Date.now()) : 0,
     placementRemainingMs: game.phase === 'placement' ? Math.max(0, game.placementEndsAt - Date.now()) : 0,
@@ -826,6 +856,8 @@ function setNotice(room, text) {
 }
 
 function checkRopeWin(room) {
+  // Relay keeps rotating representatives until its round timer expires.
+  if (room.game.mode === 'relay') return;
   const ropeStep = publicStateFor(room, null).ropeStep;
   if (Math.abs(ropeStep) === ROPE_MAX_STEPS) finishRound(room, 'rope');
 }
@@ -838,6 +870,16 @@ function addTeamScore(room, team, score, checkWin = true) {
   game.scores[team] += weighted * multiplier;
 
   if (checkWin) checkRopeWin(room);
+}
+
+function addRelayScore(room, team, score) {
+  const points = Math.max(0, score);
+  if (!points) return;
+  const game = room.game;
+  // Relay points are literal: an exact representative answer is 150 points
+  // (two 75-point rope steps), while each supporter adds exactly one point.
+  game.rawScores[team] += points / getMultipliers(room)[team];
+  game.scores[team] += points;
 }
 
 // Clients flash a player's name tag whenever this counter goes up.
@@ -875,6 +917,24 @@ function resetPlayerProgress(room) {
     player.progress = { promptIndex: 0, promptStartedAt: now };
     player.roundDraft = null;
   }
+}
+
+function queueRound(room, index) {
+  const game = room.game;
+  const modeIndex = index === MODES.length ? game.wheelSelectedIndex : index;
+  const mode = MODES[modeIndex];
+  if (!mode) return;
+  game.phase = 'roundIntro';
+  game.roundIndex = index;
+  game.modeIndex = modeIndex;
+  game.mode = mode.id;
+  game.roundIntroUntil = Date.now() + ROUND_INTRO_MS;
+  game.scores = { blue: 0, white: 0 };
+  game.rawScores = { blue: 0, white: 0 };
+  game.relay = null;
+  game.notice = `${index === MODES.length ? '결승' : `${index + 1}라운드`} · ${mode.name} 규칙을 확인하세요!`;
+  if (ROUND_INTRO_MS <= 0) beginRound(room, index);
+  else broadcast(room);
 }
 
 function beginRound(room, index) {
@@ -970,7 +1030,7 @@ function endGame(room, winner) {
 
 function startRelayDuel(room) {
   const game = room.game;
-  if (game.phase !== 'round' || game.mode !== 'relay') return;
+  if (game.phase !== 'round' || game.mode !== 'relay' || Date.now() >= game.roundEndsAt) return;
   const byTeam = {
     blue: getActivePlayers(room).filter((player) => player.team === 'blue'),
     white: getActivePlayers(room).filter((player) => player.team === 'white'),
@@ -1020,7 +1080,7 @@ function finishRelayDuel(room) {
 
   setTimeout(() => {
     if (rooms.get(room.id) === room && game.phase === 'round' && game.mode === 'relay' && game.relay === relay) startRelayDuel(room);
-  }, 1_800);
+  }, RELAY_DUEL_PAUSE_MS);
 }
 
 function awardTimeoutScore(room, player, score) {
@@ -1037,9 +1097,14 @@ function settleRelayDrafts(room, relay) {
     if (!draft || draft.kind !== 'relay' || draft.deadline !== relay.deadline || relay.submissions[player.id] || !normalizeSentence(draft.text)) continue;
     const result = calculateTypedScore(draft.text, relay.prompt, Date.now() - relay.startedAt, 'repair');
     const representative = player.id === relay.blueId || player.id === relay.whiteId;
-    const score = result.score * (representative ? 10 : 1);
+    const maxScore = representative ? ROPE_POINTS_PER_STEP * 2 : 1;
+    const score = result.exact ? maxScore : result.score / 100 * maxScore;
     relay.submissions[player.id] = { team: player.team, exact: result.exact, score };
-    awardTimeoutScore(room, player, score);
+    if (score > 0) {
+      creditPlayer(player, score);
+      addRelayScore(room, player.team, score);
+      send(player.ws, { type: 'timeoutScore', score, relay: true, representative });
+    }
   }
 }
 
@@ -1099,7 +1164,7 @@ function finishPlacement(room) {
   // Team assignment is automatic, so do not hold the class on a separate
   // reveal screen. The first round begins as soon as the 30-second test ends.
   game.notice = '타자 실력이 비슷하도록 팀을 나눴어요! 1라운드를 시작합니다.';
-  beginRound(room, 0);
+  queueRound(room, 0);
 }
 
 function handlePracticeAnswer(room, player, answer) {
@@ -1204,16 +1269,15 @@ function handleRelayAnswer(player, answer, deadline) {
   const team = relay.blueId === player.id ? 'blue' : relay.whiteId === player.id ? 'white' : null;
   if (!player.team || player.spectator || relay.submissions[player.id] || relay.lastResult) return;
 
-  const elapsedMs = Date.now() - relay.startedAt;
   const exact = normalizeSentence(answer) === normalizeSentence(relay.prompt);
-  const baseScore = exact ? Math.max(0, 60 + Math.min(40, 40 * (1 - elapsedMs / RELAY_LIMIT_MS))) : 0;
-  const score = baseScore * (team ? 10 : 1);
+  const representative = Boolean(team);
+  const score = exact ? representative ? ROPE_POINTS_PER_STEP * 2 : 1 : 0;
   player.roundDraft = null;
   relay.submissions[player.id] = { team: player.team, exact, score };
-  send(player.ws, { type: 'relayAnswerResult', correct: exact, score, representative: Boolean(team) });
+  send(player.ws, { type: 'relayAnswerResult', correct: exact, score, representative });
   if (score) {
     creditPlayer(player, score);
-    addTeamScore(room, player.team, score);
+    addRelayScore(room, player.team, score);
   }
   if (game.phase !== 'round') return;
   if (getActivePlayers(room).every((entry) => relay.submissions[entry.id])) finishRelayDuel(room);
@@ -1379,11 +1443,13 @@ function tick() {
     } else if (game.phase === 'placement' && now >= game.placementEndsAt) {
       finishPlacement(room);
     } else if (game.phase === 'teamReveal' && now >= game.teamRevealUntil) {
-      beginRound(room, 0);
+      queueRound(room, 0);
     } else if (game.phase === 'intermission' && now >= game.intermissionUntil) {
-      beginRound(room, game.roundIndex + 1);
+      queueRound(room, game.roundIndex + 1);
     } else if (game.phase === 'wheel' && now >= game.wheelEndsAt) {
-      beginRound(room, MODES.length);
+      queueRound(room, MODES.length);
+    } else if (game.phase === 'roundIntro' && now >= game.roundIntroUntil) {
+      beginRound(room, game.roundIndex);
     }
   }
 
