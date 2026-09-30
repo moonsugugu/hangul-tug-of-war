@@ -5,11 +5,25 @@ import { WebSocket } from 'ws';
 
 const PORT = 18787;
 
-function connect() {
+function connect(port = PORT) {
   return new Promise((resolve, reject) => {
-    const socket = new WebSocket(`ws://127.0.0.1:${PORT}/ws`);
+    const socket = new WebSocket(`ws://127.0.0.1:${port}/ws`);
     socket.once('open', () => resolve(socket));
     socket.once('error', reject);
+  });
+}
+
+function startServer(t, port, env) {
+  const server = spawn(process.execPath, ['server/index.js'], {
+    cwd: new URL('..', import.meta.url),
+    env: { ...process.env, PORT: String(port), ...env },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  t.after(() => server.kill());
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('시험 서버 시작 실패')), 5_000);
+    server.stdout.once('data', () => { clearTimeout(timer); resolve(server); });
+    server.once('error', reject);
   });
 }
 
@@ -53,35 +67,20 @@ function watch(socket) {
   };
 }
 
+// 오답은 30점이 깎이므로 '정답 한 번'으로는 팀 점수가 0보다 작을 수 있다.
+// 우리 팀 점수가 0보다 커질 때까지(=상대 팀 0점보다 앞설 때까지) 계속 푼다.
 async function answerQuizCorrectly(client, initialState) {
   let current = initialState;
-  while (current.phase === 'round' && current.prompt?.kind === 'quiz') {
+  while (current.phase === 'round' && current.prompt?.kind === 'quiz' && !(current.scores?.[current.self?.team] > 0)) {
     const promptId = current.prompt.id;
     const overtimeCount = current.overtimeCount;
-    const nextState = client.waitFor((state) => state.phase !== 'round' || state.prompt?.id !== promptId || state.overtimeCount !== overtimeCount, 8_000);
-    const choiceResult = client.waitForMessage('choiceResult', 1_500);
-    client.send({ type: 'choice', choice: current.prompt.choices[0] });
-    try {
-      if ((await choiceResult).correct) return;
-    } catch {
-      // The round may expire before an answer is accepted; inspect its next state below.
-    }
-    current = await nextState;
+    client.send({ type: 'choice', choice: current.prompt.choices[0], promptId });
+    current = await client.waitFor((state) => state.phase !== 'round' || state.prompt?.id !== promptId || state.overtimeCount !== overtimeCount, 8_000);
   }
 }
 
 test('라운드별 승리, 10초 연장, 2:2 돌림판 결승', async (t) => {
-  const server = spawn(process.execPath, ['server/index.js'], {
-    cwd: new URL('..', import.meta.url),
-    env: { ...process.env, PORT: String(PORT), ROUND_DURATION_MS: '900', ROUND_INTRO_MS: '120', RELAY_DUEL_PAUSE_MS: '80', OVERTIME_MS: '600', INTERMISSION_MS: '200', WHEEL_DURATION_MS: '700', PLACEMENT_MS: '1200', TEAM_REVEAL_MS: '200' },
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
-  t.after(() => server.kill());
-  await new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error('시험 서버 시작 실패')), 5_000);
-    server.stdout.once('data', () => { clearTimeout(timer); resolve(); });
-    server.once('error', reject);
-  });
+  await startServer(t, PORT, { ROUND_DURATION_MS: '900', ROUND_INTRO_MS: '120', RELAY_DUEL_PAUSE_MS: '80', OVERTIME_MS: '600', INTERMISSION_MS: '200', WHEEL_DURATION_MS: '700', PLACEMENT_MS: '1200', TEAM_REVEAL_MS: '200' });
 
   const blueSocket = await connect();
   const whiteSocket = await connect();
@@ -158,33 +157,7 @@ test('라운드별 승리, 10초 연장, 2:2 돌림판 결승', async (t) => {
   assert.deepEqual(result.roundWins, { blue: 3, white: 2 });
   assert.equal(result.roundScores.length, 5);
 
-  // Twenty rope steps must award only this round, not end the whole match.
-  const quickBlueSocket = await connect();
-  const quickWhiteSocket = await connect();
-  t.after(() => { quickBlueSocket.close(); quickWhiteSocket.close(); });
-  const quickBlue = watch(quickBlueSocket);
-  const quickWhite = watch(quickWhiteSocket);
-  quickBlue.send({ type: 'createRoom', name: '빠른 청', characterId: 'bear' });
-  const quickLobby = await quickBlue.waitFor((state) => state.phase === 'lobby' && state.self?.team === 'blue');
-  quickWhite.send({ type: 'join', roomId: quickLobby.roomId, name: '빠른 백', characterId: 'cat' });
-  await quickWhite.waitFor((state) => state.phase === 'lobby' && state.self?.team === 'white');
-  quickBlue.send({ type: 'start' });
-  const typedWords = [];
-  let quickState = await quickBlue.waitFor((state) => state.phase === 'round' && state.roundIndex === 0);
-  for (let count = 0; count < 40 && quickState.phase === 'round'; count += 1) {
-    const { id, word } = quickState.prompt;
-    typedWords.push(word);
-    quickBlue.send({ type: 'answer', answer: word });
-    quickState = await quickBlue.waitFor((state) => state.phase !== 'round' || state.prompt?.id !== id);
-  }
-  assert.equal(new Set(typedWords).size, typedWords.length, '한 바퀴 안에서는 같은 낱말이 다시 나오지 않아야 해요');
-  assert.equal(quickState.phase, 'intermission');
-  assert.equal(quickState.roundScores[0].reason, 'rope');
-  assert.equal(Math.abs(quickState.ropeStep), 20);
-  assert.deepEqual(quickState.roundWins, { blue: 1, white: 0 });
-  assert.ok(quickState.players.find((player) => player.id === quickState.self.id).scoreCount >= 1, '점수를 얻으면 이름표 반짝임 카운터가 올라가요');
-
-  // Every player can help in relay; a representative answer moves the rope two steps.
+  // 릴레이에서도 모두의 타자 점수가 줄을 당기고, 대표 점수는 2배로 들어간다.
   const relaySockets = await Promise.all(Array.from({ length: 4 }, () => connect()));
   t.after(() => relaySockets.forEach((socket) => socket.close()));
   const relayClients = relaySockets.map(watch);
@@ -215,14 +188,14 @@ test('라운드별 승리, 10초 연장, 2:2 돌림판 결승', async (t) => {
   assert.equal((await relayHost.waitFor((state) => state.phase === 'round' && state.roundIndex === 3)).scores.blue, 0, '지난 대결 답안은 점수에 반영하지 않아요');
   cheer.send({ type: 'relayAnswer', answer: relayFourth.prompt.prompt, deadline: relayFourth.relay.deadline });
   const cheered = await relayHost.waitFor((state) => state.phase === 'round' && state.roundIndex === 3 && state.scores.blue > 0);
-  assert.equal(cheered.scores.blue, 1, '응원 정답은 정확히 1점을 더해요');
+  assert.equal(cheered.scores.blue, 150, '대표가 아닌 친구도 다른 라운드처럼 타자 점수(100점 × 4라운드 배율 1.5)를 보태요');
   cheer.send({ type: 'relayAnswer', answer: relayFourth.prompt.prompt, deadline: relayFourth.relay.deadline });
   await new Promise((resolve) => setTimeout(resolve, 100));
   assert.equal((await relayHost.waitFor((state) => state.phase === 'round' && state.roundIndex === 3)).scores.blue, cheered.scores.blue, '한 대결에 중복 점수를 받지 않아요');
   relayById.get(relayFourth.relay.blueId).send({ type: 'relayAnswer', answer: relayFourth.prompt.prompt, deadline: relayFourth.relay.deadline });
   const represented = await relayHost.waitFor((state) => state.roundIndex === 3 && state.scores.blue > cheered.scores.blue);
-  assert.equal(represented.scores.blue - cheered.scores.blue, 150, '대표 정답은 정확히 줄 2칸만큼 점수를 더해요');
-  assert.equal(Math.abs(represented.ropeStep - cheered.ropeStep), 2, '대표 정답은 줄을 정확히 2칸 움직여요');
+  assert.equal(represented.scores.blue - cheered.scores.blue, cheered.scores.blue * 2, '대표 점수는 2배로 들어가요');
+  assert.equal(Math.abs(represented.ropeStep - cheered.ropeStep), 4, '대표 정답 300점은 줄을 4칸(75점마다 1칸) 움직여요');
   relayById.get(relayFourth.relay.whiteId).send({ type: 'relayAnswer', answer: '오답', deadline: relayFourth.relay.deadline });
   relayById.get(whiteSupporter.id).send({ type: 'relayAnswer', answer: '오답', deadline: relayFourth.relay.deadline });
   const rotated = await relayHost.waitFor((state) => state.phase === 'round' && state.roundIndex === 3 && state.relay?.deadline !== relayFourth.relay.deadline);
@@ -308,4 +281,66 @@ test('라운드별 승리, 10초 연장, 2:2 돌림판 결승', async (t) => {
   });
   crowdSockets[30].send(JSON.stringify({ type: 'join', roomId: crowdLobby.roomId, name: '31번째', characterId: 'cat' }));
   assert.match((await rejection).message, /최대 30명/);
+});
+
+test('줄을 끝까지 5번 먼저 당겨야 라운드 승리, 2라운드 문제는 다시 나오지 않아요', async (t) => {
+  const port = PORT + 1;
+  // 시간 제한에 걸리지 않도록 라운드를 길게 둔다.
+  await startServer(t, port, { ROUND_DURATION_MS: '60000', ROUND_INTRO_MS: '50', INTERMISSION_MS: '100', PLACEMENT_MS: '300', TEAM_REVEAL_MS: '50' });
+  const blueSocket = await connect(port);
+  const whiteSocket = await connect(port);
+  t.after(() => { blueSocket.close(); whiteSocket.close(); });
+  const blue = watch(blueSocket);
+  const white = watch(whiteSocket);
+  blue.send({ type: 'createRoom', name: '청', characterId: 'bear' });
+  const lobby = await blue.waitFor((state) => state.phase === 'lobby' && state.self?.team === 'blue');
+  white.send({ type: 'join', roomId: lobby.roomId, name: '백', characterId: 'cat' });
+  await white.waitFor((state) => state.phase === 'lobby' && state.self?.team === 'white');
+  blue.send({ type: 'start' });
+
+  // 1라운드: 청팀만 낱말을 입력해 줄을 계속 당긴다.
+  let state = await blue.waitFor((next) => next.phase === 'round' && next.roundIndex === 0);
+  assert.equal(state.ropeEndsToWin, 5);
+  assert.deepEqual(state.ropeEnds, { blue: 0, white: 0 });
+  const typedWords = [];
+  let firstEnd = null;
+  for (let count = 0; count < 200 && state.phase === 'round'; count += 1) {
+    const { id, word } = state.prompt;
+    typedWords.push(word);
+    blue.send({ type: 'answer', answer: word });
+    state = await blue.waitFor((next) => next.phase !== 'round' || next.prompt?.id !== id);
+    if (!firstEnd && state.phase === 'round' && state.ropeEnds.blue === 1) firstEnd = state;
+  }
+  assert.ok(firstEnd, '줄이 처음 끝에 닿아도 라운드는 끝나지 않아요');
+  assert.equal(firstEnd.ropeStep, 0, '끝에 닿으면 줄이 가운데로 돌아가요');
+  assert.equal(state.phase, 'intermission');
+  assert.equal(state.roundScores[0].reason, 'rope');
+  assert.deepEqual(state.roundScores[0].ropeEnds, { blue: 5, white: 0 });
+  assert.deepEqual(state.roundWins, { blue: 1, white: 0 });
+  assert.ok(typedWords.length >= 75, '20칸(1500점)을 5번 당겨야 하므로 100점짜리 답이 75번 이상 필요해요');
+  assert.equal(new Set(typedWords).size, typedWords.length, '한 바퀴 안에서는 같은 낱말이 다시 나오지 않아야 해요');
+  assert.ok(state.players.find((player) => player.id === state.self.id).scoreCount >= 1, '점수를 얻으면 이름표 반짝임 카운터가 올라가요');
+
+  // 2라운드: 아주 빨리 풀어도 같은 문제가 다시 나오지 않아야 한다(예전에는 60번째 문제부터 반복).
+  state = await blue.waitFor((next) => next.phase === 'round' && next.roundIndex === 1 && next.prompt?.kind === 'quiz');
+  const seen = [];
+  for (let count = 0; count < 120; count += 1) {
+    const { id, category, meaning, choices } = state.prompt;
+    seen.push(`${category}|${meaning}`);
+    blue.send({ type: 'choice', choice: choices[0], promptId: id });
+    state = await blue.waitFor((next) => next.phase !== 'round' || next.prompt?.id !== id);
+    assert.equal(state.phase, 'round');
+    if (count === 0) {
+      // 보기를 두 번 누른 것처럼 지난 문제 번호로 온 답은 다음 문제에 적용하지 않는다.
+      const before = state;
+      blue.send({ type: 'choice', choice: choices[0], promptId: id });
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      const after = await blue.waitFor(() => true);
+      assert.equal(after.prompt.id, before.prompt.id, '지난 문제에 늦게 온 답은 무시해요');
+      assert.deepEqual(after.scores, before.scores);
+    }
+  }
+  assert.equal(new Set(seen).size, seen.length, '2라운드에서 같은 문제가 다시 나오지 않아야 해요');
+  const isWordQuestion = seen.slice(0, 10).map((key) => key.startsWith('순우리말|'));
+  assert.deepEqual(isWordQuestion, [true, false, true, false, true, false, true, false, true, false], '순우리말 문제와 한글 창제 문제가 번갈아 나와요');
 });

@@ -145,6 +145,8 @@ main { width: min(1180px, calc(100% - 36px)); margin: 0 auto 60px; }
 .multiplier { color: var(--muted); font-size: 10px; }
 .round-wins { display: inline-block; margin-left: 9px; padding: 3px 7px; border-radius: 99px; color: var(--blue-dark); background: rgba(255,255,255,.7); font-size: 10px; font-weight: 700; }
 .score-card--white .round-wins { color: #a55a45; }
+.rope-ends { display: inline-block; margin-left: 6px; padding: 3px 7px; border-radius: 99px; color: white; background: var(--blue-dark); font-size: 10px; font-weight: 700; }
+.score-card--white .rope-ends { color: var(--ink); background: var(--yellow); }
 .score-vs { color: #b2a79a; font-family: 'Jua', sans-serif; font-size: 15px; }
 
 .arena-card { position: relative; overflow: hidden; padding: 20px 22px 16px; border: 1px solid #dfd5ca; border-radius: 24px; background: rgba(255, 253, 249, .72); box-shadow: var(--shadow); }
