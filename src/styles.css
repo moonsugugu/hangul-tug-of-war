@@ -270,6 +270,39 @@ main { width: min(1180px, calc(100% - 36px)); margin: 0 auto 60px; }
 .teacher-settings { margin-bottom: 18px; border-radius: 20px; padding: 18px 22px; }
 .score-settings { margin: 16px 0; padding: 18px 22px; border-radius: 20px; }
 .teacher-participation { margin: 18px 0; padding: 0; border: 0; }
+.hero-preview { width: 100%; margin: 0 0 24px; }
+.hero-preview video { display: block; width: 100%; aspect-ratio: 240 / 91; object-fit: cover; border: 1px solid var(--line); border-radius: 22px; background: var(--blue-soft); box-shadow: var(--shadow); }
+.hero-preview figcaption { margin-top: 10px; color: var(--muted); font-size: 12px; line-height: 1.6; }
+.solo-launch { padding: 22px; margin: 18px 0; border-radius: 20px; }
+.solo-launch h2, .waiting-controls h2, .ai-match-status h2 { margin: 8px 0; font-size: 23px; }
+.solo-launch p, .waiting-controls p, .ai-match-status p { color: var(--muted); line-height: 1.6; }
+.solo-launch-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin-top: 18px; }
+.solo-launch-grid article { padding: 18px; background: var(--paper); border: 1px solid var(--line); border-radius: 16px; }
+.solo-launch-grid h3 { margin: 0; font-size: 19px; }
+.solo-launch-grid select { margin-bottom: 12px; }
+.solo-launch-grid small { display: block; margin-top: 10px; color: var(--muted); }
+.solo-actions { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.waiting-controls { display: grid; grid-template-columns: minmax(0, 1fr) 145px; gap: 18px; padding: 18px; margin-bottom: 20px; border-radius: 20px; position: sticky; top: 10px; z-index: 5; background: var(--paper); box-shadow: var(--shadow); }
+.waiting-round-nav { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
+.waiting-round-nav button { min-height: 40px; padding: 8px 10px; font-size: 12px; }
+.waiting-round-nav [aria-pressed="true"] { border-color: var(--blue); background: var(--blue-soft); color: var(--blue-dark); }
+.waiting-qr { display: grid; justify-items: center; align-content: center; gap: 6px; }
+.waiting-qr img { width: 128px; max-width: 100%; aspect-ratio: 1; border-radius: 10px; background: white; }
+.waiting-qr strong { font-family: 'Jua', sans-serif; letter-spacing: 2px; color: var(--blue-dark); }
+.waiting-qr button { min-height: 36px; padding: 7px 12px; font-size: 12px; }
+.waiting-scoreboard { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.score-card .practice-round-number { font-size: 30px; }
+.ai-match-status { display: flex; justify-content: space-between; align-items: center; gap: 14px; padding: 18px 22px; margin-bottom: 18px; border-radius: 20px; }
+@media (max-width: 760px) {
+  .solo-launch-grid { grid-template-columns: 1fr; }
+  .waiting-controls { grid-template-columns: minmax(0, 1fr) 105px; gap: 10px; padding: 12px; top: 4px; }
+  .waiting-controls h2 { font-size: 18px; }
+  .waiting-controls p { font-size: 12px; margin: 7px 0; }
+  .waiting-controls .solo-actions button { min-height: 40px; padding: 8px 10px; font-size: 12px; }
+  .waiting-round-nav button { padding: 7px; font-size: 10px; }
+  .waiting-qr img { width: 100px; }
+  .ai-match-status { align-items: flex-start; flex-direction: column; }
+}
 .teacher-participation legend { font-weight: 700; font-size: 20px; }
 .teacher-participation-options { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; margin-top: 12px; }
 .teacher-participation-options label { display: flex; gap: 10px; align-items: center; min-height: 48px; padding: 12px; border: 1px solid var(--line); border-radius: 12px; cursor: pointer; }

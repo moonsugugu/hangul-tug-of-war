@@ -2,8 +2,9 @@ import { WORD_PROMPTS, WORD_QUIZ_PROMPTS, HANGUL_CREATION_QUIZ_PROMPTS } from '.
 import { MAX_CSV_BYTES, validateCustomQuestions } from '../shared/question-csv.js';
 import { SCORE_MULTIPLIER_LEVELS, SCORE_SETTING_PHASES, ANSWER_REVIEW_MS } from '../shared/score-settings.js';
 import { HOST_PARTICIPATION_OPTIONS } from '../shared/teacher-participation.js';
+import { getAiLevel, getAiAnswerDelay } from '../shared/ai-levels.js';
 import { createServer } from 'node:http';
-import { existsSync } from 'node:fs';
+import { existsSync, createReadStream } from 'node:fs';
 import { readFile, stat } from 'node:fs/promises';
 import { dirname, extname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -252,6 +253,9 @@ const MIME_TYPES = {
   '.csv': 'text/csv; charset=utf-8',
   '.svg': 'image/svg+xml',
   '.ico': 'image/x-icon',
+  '.jpg': 'image/jpeg',
+  '.png': 'image/png',
+  '.mp4': 'video/mp4',
 };
 
 const rooms = new Map();
@@ -295,6 +299,8 @@ function createRoom(playMode = 'typing', hostParticipation = 'auto') {
     id: createRoomId(),
     playMode,
     hostParticipation,
+    sessionMode: 'class',
+    aiLevel: 1,
     scoreMultiplier: 1,
     customQuestions: null,
     customModes: null,
@@ -349,12 +355,13 @@ function getActivePlayers(room) {
 }
 
 function getHostTeam(room) {
+  if (room.sessionMode !== 'class') return 'blue';
   return ['blue', 'white'].includes(room.hostParticipation) ? room.hostParticipation : null;
 }
 
 function applyHostParticipation(room, player) {
   if (!player.isHost) return;
-  player.spectator = room.hostParticipation === 'observe';
+  player.spectator = room.sessionMode === 'class' && room.hostParticipation === 'observe';
   player.team = player.spectator ? null : getHostTeam(room) || player.team || (getCounts(room).blue <= getCounts(room).white ? 'blue' : 'white');
   player.progress = player.spectator ? null : player.progress || { promptIndex: 0, promptStartedAt: Date.now() };
   player.roundDraft = null;
@@ -474,6 +481,8 @@ function publicStateFor(room, player) {
     type: 'state',
     roomId: room.id,
     playMode: room.playMode,
+    sessionMode: room.sessionMode,
+    aiLevel: room.aiLevel,
     hostParticipation: room.hostParticipation,
     scoreMultiplier: room.scoreMultiplier,
     roundModes: getModes(room),
@@ -532,7 +541,8 @@ function publicStateFor(room, player) {
       characterId: entry.characterId,
       isHost: entry.isHost,
       spectator: entry.spectator,
-      connected: entry.ws.readyState === entry.ws.OPEN,
+      isAI: Boolean(entry.isAI),
+      connected: Boolean(entry.isAI || entry.ws?.readyState === entry.ws?.OPEN),
       scoreCount: entry.scoreCount || 0,
     })),
     prompt: getPromptFor(room, player),
@@ -549,7 +559,7 @@ function publicStateFor(room, player) {
 }
 
 function send(ws, payload) {
-  if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(payload));
+  if (ws && ws.readyState === ws.OPEN) ws.send(JSON.stringify(payload));
 }
 
 function broadcast(room) {
@@ -574,6 +584,7 @@ function setNotice(room, text) {
 }
 
 function checkRopeWin(room) {
+  if (room.sessionMode === 'waiting') return;
   // Relay keeps rotating representatives until its round timer expires.
   if (room.game.mode === 'relay') return;
   const ropeStep = publicStateFor(room, null).ropeStep;
@@ -685,6 +696,7 @@ function beginRound(room, index) {
   resetPlayerProgress(room);
 
   if (mode.id === 'relay') startRelayDuel(room);
+  else scheduleAiAnswer(room);
   broadcast(room);
 }
 
@@ -694,6 +706,15 @@ function finishRound(room, reason = 'time') {
   if (reason === 'time') settleRoundDrafts(room);
   const bluePoints = Math.round(game.scores.blue);
   const whitePoints = Math.round(game.scores.white);
+  if (room.sessionMode === 'waiting') {
+    game.roundScores.push({ round: game.roundIndex + 1, mode: getMode(room)?.name, blue: bluePoints, white: 0, winner: 'blue', reason: 'practice' });
+    game.relay = null;
+    game.phase = 'intermission';
+    game.intermissionUntil = Date.now() + INTERMISSION_MS;
+    game.notice = '연습을 마쳤어요. 다음 종목을 읽어 보고 이어서 연습하세요.';
+    broadcast(room);
+    return;
+  }
   const relayTiebreak = bluePoints === whitePoints && game.mode === 'relay' && game.overtimeCount >= MAX_RELAY_OVERTIMES;
   if (bluePoints === whitePoints && !relayTiebreak) {
     game.overtimeCount += 1;
@@ -762,11 +783,12 @@ function startRelayDuel(room) {
     blue: getActivePlayers(room).filter((player) => player.team === 'blue'),
     white: getActivePlayers(room).filter((player) => player.team === 'white'),
   };
-  if (!byTeam.blue.length || !byTeam.white.length) return;
+  if (!byTeam.blue.length || (!byTeam.white.length && room.sessionMode !== 'waiting')) return;
   for (const player of getActivePlayers(room)) player.roundDraft = null;
 
   const selected = {};
   for (const team of ['blue', 'white']) {
+    if (!byTeam[team].length) { selected[team] = null; continue; }
     let available = byTeam[team].filter((player) => !game.relayUsed[team].has(player.id));
     if (!available.length) {
       game.relayUsed[team].clear();
@@ -787,7 +809,37 @@ function startRelayDuel(room) {
     submissions: {},
     lastResult: null,
   };
+  scheduleAiAnswer(room);
   broadcast(room);
+}
+
+function scheduleAiAnswer(room) {
+  if (room.sessionMode !== 'ai' || room.game.phase !== 'round') return;
+  const bot = getActivePlayers(room).find((entry) => entry.isAI);
+  const prompt = getPromptFor(room, bot);
+  if (!bot || !prompt || prompt.submitted) return;
+  const startedAt = prompt.kind === 'relay' ? room.game.relay.startedAt : bot.progress.promptStartedAt;
+  bot.nextAnswerAt = startedAt + getAiAnswerDelay(room.aiLevel, prompt);
+}
+
+function answerAsAi(room, now) {
+  const bot = getActivePlayers(room).find((entry) => entry.isAI);
+  if (!bot || !bot.nextAnswerAt || now < bot.nextAnswerAt) return;
+  bot.nextAnswerAt = 0;
+  const prompt = getPromptFor(room, bot);
+  if (!prompt || prompt.submitted || (prompt.kind === 'relay' && room.game.relay.lastResult)) return;
+  const correct = Math.random() < getAiLevel(room.aiLevel).accuracy;
+  if (prompt.kind === 'quiz') {
+    const source = currentRoomQuizPrompt(room, bot).prompt;
+    const wrong = source.choices.filter((choice) => choice !== source.answer);
+    handleChoice(bot, correct ? source.answer : wrong[Math.floor(Math.random() * wrong.length)], prompt.id);
+  } else {
+    const expected = prompt.kind === 'word' ? prompt.word : prompt.kind === 'repair' ? currentRepairPrompt(bot.progress).prompt.answer : prompt.prompt;
+    const answer = correct ? expected : `${expected.slice(0, -1)}?`;
+    if (prompt.kind === 'relay') handleRelayAnswer(bot, answer, prompt.relayDeadline);
+    else handleTypedAnswer(bot, answer);
+  }
+  if (room.game.phase === 'round' && getMode(room)?.id !== 'relay') scheduleAiAnswer(room);
 }
 
 function finishRelayDuel(room) {
@@ -806,7 +858,7 @@ function finishRelayDuel(room) {
   broadcast(room);
 
   setTimeout(() => {
-    if (rooms.get(room.id) === room && game.phase === 'round' && game.mode === 'relay' && game.relay === relay) startRelayDuel(room);
+    if (rooms.get(room.id) === room && room.game === game && game.phase === 'round' && game.mode === 'relay' && game.relay === relay) startRelayDuel(room);
   }, RELAY_DUEL_PAUSE_MS);
 }
 
@@ -1055,7 +1107,12 @@ function startGame(player) {
   const room = getRoomForPlayer(player);
   if (!room) return;
   const game = room.game;
-  if (!player.isHost || game.phase !== 'lobby') return;
+  if (!player.isHost) return;
+  if (room.sessionMode === 'waiting') {
+    const classCount = [...room.players.values()].filter((entry) => !entry.isAI && (!entry.isHost || room.hostParticipation !== 'observe')).length;
+    if (classCount < 2) return send(player.ws, { type: 'error', message: '본 경기에 참가할 사람이 두 명 이상 모여야 해요. 학생 입장을 조금 더 기다려 주세요.' });
+    resetRoomToLobby(room);
+  } else if (game.phase !== 'lobby') return;
   if (getActivePlayers(room).length < 2) {
     send(player.ws, { type: 'error', message: '경기에 참가하는 사람이 두 명 이상 있어야 시작할 수 있어요. 진행만 하는 선생님은 참가 인원에서 제외해요.' });
     return;
@@ -1096,18 +1153,61 @@ function startGame(player) {
   broadcast(room);
 }
 
-function resetToLobby(player) {
-  const room = getRoomForPlayer(player);
-  if (!room) return;
-  if (!player.isHost) return;
+function resetRoomToLobby(room) {
+  room.sessionMode = 'class';
+  for (const entry of room.players.values()) if (entry.isAI) room.players.delete(entry.id);
   room.game = createGame();
   for (const entry of room.players.values()) {
     entry.spectator = false;
+    entry.team = null;
     entry.progress = { promptIndex: 0, promptStartedAt: Date.now() };
     entry.practiceCount = 0;
+    entry.scoreCount = 0;
+    entry.roundDraft = null;
     applyHostParticipation(room, entry);
+    if (!entry.spectator && !entry.team) entry.team = getCounts(room).blue <= getCounts(room).white ? 'blue' : 'white';
   }
+}
+
+function resetToLobby(player) {
+  const room = getRoomForPlayer(player);
+  if (!room || !player.isHost) return;
+  resetRoomToLobby(room);
   broadcast(room);
+}
+
+function startSoloMode(player, message) {
+  const room = getRoomForPlayer(player);
+  if (!room) return;
+  const fail = (text) => send(player.ws, { type: 'error', message: text });
+  if (!player.isHost) return fail('선생님(방장)만 모드를 시작할 수 있어요.');
+  if (!(room.game.phase === 'lobby' || (room.sessionMode === 'ai' && room.game.phase === 'results'))) return;
+  const ai = message.type === 'startAI';
+  if (ai && [...room.players.values()].filter((entry) => !entry.isAI).length !== 1) return fail('AI 1:1 모드는 방에 혼자 있을 때 시작해 주세요.');
+  if (ai && !getAiLevel(message.level)) return fail('AI 난이도는 1단계부터 10단계까지 선택해 주세요.');
+  resetRoomToLobby(room);
+  room.sessionMode = ai ? 'ai' : 'waiting';
+  if (ai) room.aiLevel = message.level;
+  for (const entry of room.players.values()) {
+    entry.spectator = !entry.isHost;
+    entry.team = entry.isHost ? 'blue' : null;
+    entry.progress = entry.isHost ? { promptIndex: 0, promptStartedAt: Date.now() } : null;
+  }
+  if (ai) {
+    const bot = { id: randomUUID(), roomId: room.id, ws: null, name: `AI ${room.aiLevel}단계`, team: 'white', characterId: 'fox', isAI: true, isHost: false, spectator: false, progress: { promptIndex: 0, promptStartedAt: Date.now() }, scoreCount: 0 };
+    room.players.set(bot.id, bot);
+  }
+  room.game.rosterCounts = { blue: 1, white: ai ? 1 : 0 };
+  queueRound(room, 0);
+}
+
+function selectWaitingRound(player, message) {
+  const room = getRoomForPlayer(player);
+  if (!room || !player.isHost || room.sessionMode !== 'waiting') return;
+  if (!Number.isInteger(message.roundIndex) || message.roundIndex < 0 || message.roundIndex >= MODES.length) return;
+  // Starting a new practice cycle keeps the room's wait history bounded.
+  room.game.roundScores = [];
+  beginRound(room, message.roundIndex);
 }
 
 function joinPlayer(ws, message) {
@@ -1124,8 +1224,8 @@ function joinPlayer(ws, message) {
   }
 
   const game = room.game;
-  if (game.phase !== 'lobby') {
-    send(ws, { type: 'error', message: '게임이 이미 진행 중입니다. 다음 게임을 기다려 주세요.' });
+  if (game.phase !== 'lobby' && room.sessionMode !== 'waiting') {
+    send(ws, { type: 'error', message: room.sessionMode === 'ai' ? 'AI 1:1 경기 중인 방이에요. 학급 대기실로 돌아온 뒤 입장해 주세요.' : '게임이 이미 진행 중입니다. 다음 게임을 기다려 주세요.' });
     return;
   }
   if (room.players.size >= MAX_PLAYERS_PER_ROOM) {
@@ -1146,11 +1246,11 @@ function joinPlayer(ws, message) {
     roomId,
     ws,
     name,
-    team,
+    team: room.sessionMode === 'waiting' ? null : team,
     characterId: sanitizeCharacter(message.characterId),
     isHost: room.players.size === 0,
-    spectator: false,
-    progress: { promptIndex: 0, promptStartedAt: Date.now() },
+    spectator: room.sessionMode === 'waiting',
+    progress: room.sessionMode === 'waiting' ? null : { promptIndex: 0, promptStartedAt: Date.now() },
     practiceCount: 0,
   };
   room.players.set(player.id, player);
@@ -1195,7 +1295,9 @@ function advanceRound(player, message) {
   const game = room.game;
   // A delayed click or double tap must never skip a later round's explanation.
   if (!['intermission', 'roundIntro'].includes(game.phase) || message.phase !== game.phase || message.roundIndex !== game.roundIndex) return;
-  beginRound(room, game.phase === 'intermission' ? game.roundIndex + 1 : game.roundIndex);
+  const nextIndex = game.phase === 'intermission' ? game.roundIndex + 1 : game.roundIndex;
+  if (room.sessionMode === 'waiting' && nextIndex === MODES.length) room.game.roundScores = [];
+  beginRound(room, room.sessionMode === 'waiting' ? nextIndex % MODES.length : nextIndex);
 }
 
 function updateHostParticipation(player, message) {
@@ -1272,6 +1374,8 @@ function handleMessage(ws, rawMessage) {
   if (message.type === 'setScoreMultiplier') return updateScoreMultiplier(player, message);
   if (message.type === 'setHostParticipation') return updateHostParticipation(player, message);
   if (message.type === 'advanceRound') return advanceRound(player, message);
+  if (message.type === 'startWaiting' || message.type === 'startAI') return startSoloMode(player, message);
+  if (message.type === 'selectWaitingRound') return selectWaitingRound(player, message);
   if (message.type === 'start') return startGame(player);
   if (message.type === 'restart') return resetToLobby(player);
   if (message.type === 'answer') return handleTypedAnswer(player, message.answer);
@@ -1287,12 +1391,15 @@ function tick() {
     if (game.phase === 'round') {
       if (now >= game.roundEndsAt) finishRound(room);
       else if (game.mode === 'relay' && game.relay && now >= game.relay.deadline) finishRelayDuel(room);
+      if (room.sessionMode === 'ai' && room.game.phase === 'round') answerAsAi(room, now);
     } else if (game.phase === 'placement' && now >= game.placementEndsAt) {
       finishPlacement(room);
     } else if (game.phase === 'teamReveal' && now >= game.teamRevealUntil) {
       queueRound(room, 0);
     } else if (game.phase === 'intermission' && now >= game.intermissionUntil) {
-      beginRound(room, game.roundIndex + 1);
+      const nextIndex = game.roundIndex + 1;
+      if (room.sessionMode === 'waiting' && nextIndex === MODES.length) game.roundScores = [];
+      beginRound(room, room.sessionMode === 'waiting' ? nextIndex % MODES.length : nextIndex);
     } else if (game.phase === 'wheel' && now >= game.wheelEndsAt) {
       queueRound(room, MODES.length);
     } else if (game.phase === 'roundIntro' && now >= game.roundIntroUntil) {
@@ -1326,6 +1433,34 @@ async function serveStatic(req, res) {
   try {
     const fileStat = await stat(filePath);
     const target = fileStat.isDirectory() ? join(filePath, 'index.html') : filePath;
+    if (extname(target) === '.mp4') {
+      const size = fileStat.size;
+      const headers = { 'Content-Type': 'video/mp4', 'Accept-Ranges': 'bytes' };
+      let start = 0;
+      let end = size - 1;
+      if (req.headers.range) {
+        const match = /^bytes=(\d*)-(\d*)$/.exec(req.headers.range);
+        if (match && (match[1] || match[2])) {
+          start = match[1] ? Number(match[1]) : Math.max(0, size - Number(match[2]));
+          end = match[1] && match[2] ? Math.min(Number(match[2]), size - 1) : size - 1;
+        }
+        if (!match || (!match[1] && !match[2]) || start > end || start >= size) {
+          res.writeHead(416, { ...headers, 'Content-Range': `bytes */${size}` });
+          res.end();
+          return;
+        }
+        headers['Content-Range'] = `bytes ${start}-${end}/${size}`;
+      }
+      res.writeHead(req.headers.range ? 206 : 200, { ...headers, 'Content-Length': end - start + 1 });
+      if (req.method === 'HEAD') res.end();
+      else {
+        const stream = createReadStream(target, { start, end });
+        stream.on('error', () => res.destroy());
+        res.on('close', () => stream.destroy());
+        stream.pipe(res);
+      }
+      return;
+    }
     const body = await readFile(target);
     res.writeHead(200, { 'Content-Type': MIME_TYPES[extname(target)] || 'application/octet-stream' });
     res.end(body);
@@ -1366,14 +1501,15 @@ websocketServer.on('connection', (ws) => {
     if (!player) return;
     room.players.delete(player.id);
     socketRooms.delete(ws);
-    if (room.game.phase === 'lobby' && player.isHost) {
+    if ((room.game.phase === 'lobby' || room.sessionMode === 'waiting') && player.isHost) {
       const nextHost = room.players.values().next().value;
       if (nextHost) {
         nextHost.isHost = true;
-        room.hostParticipation = nextHost.spectator ? 'observe' : 'auto';
+        room.hostParticipation = room.sessionMode === 'waiting' ? 'auto' : nextHost.spectator ? 'observe' : 'auto';
+        if (room.sessionMode === 'waiting') resetRoomToLobby(room);
       }
     }
-    if (room.players.size === 0) rooms.delete(room.id);
+    if (![...room.players.values()].some((entry) => !entry.isAI)) rooms.delete(room.id);
     else broadcast(room);
   });
 });

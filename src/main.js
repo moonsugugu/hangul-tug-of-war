@@ -5,6 +5,7 @@ import QRCode from 'qrcode';
 import { MAX_CSV_BYTES, MAX_CUSTOM_QUESTIONS, parseQuestionCsv } from '../shared/question-csv.js';
 import { SCORE_MULTIPLIER_LEVELS, SCORE_SETTING_PHASES, ANSWER_REVIEW_MS } from '../shared/score-settings.js';
 import { HOST_PARTICIPATION_OPTIONS } from '../shared/teacher-participation.js';
+import { AI_LEVELS, getAiLevel } from '../shared/ai-levels.js';
 
 const app = document.querySelector('#app');
 const initialRoomId = normalizeRoomId(new URLSearchParams(window.location.search).get('room'));
@@ -21,6 +22,7 @@ const state = {
   nickname: '',
   selectedCharacter: 'bear',
   selectedPlayMode: 'typing',
+  selectedAiLevel: 1,
   pendingChoiceId: null,
   uploadingQuestions: false,
   questionUploadStatus: '',
@@ -96,6 +98,7 @@ function renderAdvanceRoundButton(data) {
 }
 
 function winningTeamForCelebration(data) {
+  if (data.sessionMode === 'waiting') return null;
   if (!['intermission', 'wheel', 'results'].includes(data.phase)) return null;
   const lastRound = data.roundScores?.at(-1);
   if (lastRound?.round !== data.roundNumber) return null;
@@ -176,6 +179,7 @@ function connect() {
       state.roomId = normalizeRoomId(message.roomId) || state.roomId;
       state.roomUrl = message.roomUrl || state.roomUrl;
       state.data = message;
+      if (message.sessionMode === 'ai') state.selectedAiLevel = message.aiLevel;
       if (message.prompt?.id !== state.pendingChoiceId) state.pendingChoiceId = null;
       state.joined = Boolean(message.self);
       celebrateWinIfNeeded(message);
@@ -185,6 +189,8 @@ function connect() {
       // a new question only swaps the prompt card so the arena never blanks out.
       const viewKey = [
         message.phase,
+        message.sessionMode,
+        message.aiLevel,
         message.mode?.id,
         message.roundIndex,
         message.questionSet?.revision,
@@ -450,6 +456,10 @@ function refreshTeacherSettings() {
   bindTeacherSettings(root);
   const startButton = document.querySelector('#start-button');
   if (startButton) startButton.disabled = state.uploadingQuestions;
+  const waitingButton = document.querySelector('#start-waiting-button');
+  if (waitingButton) waitingButton.disabled = state.uploadingQuestions;
+  const aiButton = document.querySelector('#start-ai-button');
+  if (aiButton) aiButton.disabled = state.uploadingQuestions || state.data?.players?.length !== 1;
 }
 
 function bindTeacherSettings(root) {
@@ -621,6 +631,32 @@ function renderTeacherSettings(data) {
   </details>`;
 }
 
+function renderSoloLaunch(data) {
+  if (!data?.self?.isHost) return '';
+  const alone = data.players?.length === 1;
+  return `<section class="solo-launch panel-card" aria-label="선생님 혼자 시작하기">
+    <div><div class="section-kicker">SOLO PLAY</div><h2>학생들이 오기 전에도 시작해요</h2><p>대기 모드로 문제를 살펴보거나, AI와 1:1로 겨뤄 보세요.</p></div>
+    <div class="solo-launch-grid">
+      <article><h3>게임 시작 대기 모드</h3><p>QR을 띄워 학생 입장을 받으면서 1~4라운드를 혼자 연습해요.</p><button type="button" id="start-waiting-button" class="secondary-button" ${state.uploadingQuestions ? 'disabled' : ''}>대기 모드 시작</button></article>
+      <article><h3>AI와 붙기 · 1:1</h3><p>선생님은 청팀, AI는 백팀! 높은 단계일수록 더 빠르고 정확하게 답해요.</p><label for="ai-level-select" class="field-label">AI 난이도 · 10단계</label><select id="ai-level-select" class="text-input">${AI_LEVELS.map((entry) => `<option value="${entry.level}" ${entry.level === state.selectedAiLevel ? 'selected' : ''}>${entry.level}단계 · ${entry.label}</option>`).join('')}</select><button type="button" id="start-ai-button" class="primary-button compact" ${!alone || state.uploadingQuestions ? 'disabled' : ''}>AI와 붙기</button>${!alone ? '<small>AI 1:1은 방에 혼자 있을 때 시작할 수 있어요.</small>' : ''}</article>
+    </div>
+  </section>`;
+}
+
+function renderWaitingControls(data) {
+  const guests = data.players.filter((entry) => !entry.isHost && !entry.isAI);
+  const classCount = guests.length + (data.hostParticipation === 'observe' ? 0 : 1);
+  return `<section class="waiting-controls panel-card" aria-label="입장 대기와 라운드 연습">
+    <div><div class="section-kicker">WAIT & PRACTICE · 학생 입장 대기</div><h2>혼자 연습하며 학생들을 기다려요</h2><p><b>학생 ${guests.length}명 입장</b> · 연습 점수는 본 경기에 이어지지 않아요.</p><div class="solo-actions"><button id="start-button" type="button" class="primary-button compact" ${classCount < 2 ? 'disabled' : ''}>학급 경기 시작 →</button><button id="return-lobby-button" type="button" class="secondary-button">설정으로 돌아가기</button></div>
+      <div class="waiting-round-nav" role="group" aria-label="연습할 라운드 선택">${data.roundModes.map((mode, index) => `<button type="button" class="secondary-button" data-waiting-round="${index}" aria-pressed="${index === data.roundIndex}">${index + 1}R ${escapeHtml(mode.name)}</button>`).join('')}</div>
+    </div><div class="waiting-qr"><img id="room-qr" alt="학생 입장용 QR 코드" /><strong>${escapeHtml(data.roomId)}</strong><button id="copy-room-button" type="button" class="secondary-button">링크 복사</button></div>
+  </section>`;
+}
+
+function renderWaitingGuest(data) {
+  return `<section class="lobby-room"><div class="lobby-title-row"><div><div class="section-kicker">WAITING ROOM</div><h1>입장했어요! 선생님을 기다려 주세요</h1><p>선생님이 문제를 연습하는 동안 학생들은 여기서 기다려요. 학급 경기가 시작되면 팀을 나눠 함께 경기합니다.</p></div><span class="waiting-pill"><i></i> 입장 완료</span></div>${renderRoomShare()}<section class="panel-card observer-card"><h2>함께 기다리는 친구들</h2><div class="player-chips">${data.players.filter((entry) => !entry.isAI).map((entry) => `<span class="player-chip">${escapeHtml(entry.name)}${entry.isHost ? '<small>선생님</small>' : ''}</span>`).join('')}</div></section></section>`;
+}
+
 function renderLobby() {
   const data = state.data;
   if (!state.connected) {
@@ -631,6 +667,7 @@ function renderLobby() {
     return `
       <section class="lobby-layout">
         <div class="hero-card">
+          <figure class="hero-preview"><video id="hero-preview-video" autoplay muted loop playsinline controls preload="metadata" poster="/videos/tug-preview-poster.jpg" aria-label="말모이 줄다리기 실제 경기 영상"><source src="/videos/tug-preview.mp4" type="video/mp4" />줄다리기 경기 영상입니다.</video><figcaption>우리말 문제를 풀수록 우리 팀이 줄을 당겨요.</figcaption></figure>
           <div class="eyebrow">HANGUL DAY · REALTIME GAME</div>
           <h1>우리말을 치고,<br /><em>줄을 당겨요.</em></h1>
           <p>순우리말의 뜻을 만나고, 바른 문장을 완성하며 청팀과 백팀이 한글의 힘으로 겨뤄요.</p>
@@ -667,6 +704,7 @@ function renderLobby() {
         ${isHost ? `<button id="start-button" class="primary-button compact" ${state.uploadingQuestions ? 'disabled' : ''}>게임 시작 <span>→</span></button>` : '<span class="waiting-pill"><i></i> 진행자를 기다리는 중</span>'}
       </div>
       <div id="teacher-settings-root">${renderTeacherSettings(data)}</div>
+      ${renderSoloLaunch(data)}
       ${renderRoomShare()}
       <div id="practice-root">${renderPracticeCard(data)}</div>
       <article class="team-lobby-card lobby-roster">
@@ -786,6 +824,7 @@ function renderTeamReveal(data) {
 }
 
 function renderScoreboard(data) {
+  if (data.sessionMode === 'waiting') return `<div class="scoreboard waiting-scoreboard"><div class="score-card score-card--blue"><div class="score-card__label">나의 연습 점수</div><strong id="blue-score">${formatScore(data.scores.blue)}</strong><small>본 경기를 시작하면 새 점수로 경기해요.</small></div><div class="score-card score-card--white"><div class="score-card__label">현재 연습 종목</div><strong class="practice-round-number">${data.roundNumber}R</strong><small>${escapeHtml(data.mode?.name || '')}</small></div></div>`;
   const mine = (team) => (data.self?.team === team ? ' is-mine' : '');
   const mineTag = (team) => (data.self?.team === team ? '<span class="mine-tag">우리 팀</span>' : '');
   const scoringRule = (team) => getScoringRule(data, team);
@@ -903,11 +942,14 @@ function renderPrompt(data) {
 
   if (data.phase === 'intermission') {
     const lastRound = data.roundScores?.at(-1);
-    const nextMode = data.roundModes?.[data.roundIndex + 1];
-    return `<section class="prompt-card intermission-card"><span class="round-badge">ROUND ${data.roundNumber} RESULT</span><h2>${teamName(lastRound?.winner)} 라운드 승리!</h2><p>${escapeHtml(data.notice || '')}</p><div class="round-result-score">청 ${formatScore(lastRound?.blue)} : ${formatScore(lastRound?.white)} 백</div><div class="next-round-guide"><span class="round-badge">다음 ${data.roundNumber + 1}라운드 안내</span><h3>${escapeHtml(nextMode?.name || '')}</h3><p>${escapeHtml(getRoundGuide(nextMode))}</p></div><div class="next-countdown">다음 라운드 시작까지 <span id="intermission-time">${getTimeLabel(data.intermissionRemainingMs)}</span></div>${renderAdvanceRoundButton(data)}</section>`;
+    const waiting = data.sessionMode === 'waiting';
+    const nextIndex = waiting ? (data.roundIndex + 1) % 4 : data.roundIndex + 1;
+    const nextMode = data.roundModes?.[nextIndex];
+    return `<section class="prompt-card intermission-card"><span class="round-badge">ROUND ${data.roundNumber} ${waiting ? 'PRACTICE' : 'RESULT'}</span><h2>${waiting ? `${data.roundNumber}라운드 연습 완료!` : `${teamName(lastRound?.winner)} 라운드 승리!`}</h2><p>${escapeHtml(data.notice || '')}</p><div class="round-result-score">${waiting ? `연습 ${formatScore(lastRound?.blue)}점` : `청 ${formatScore(lastRound?.blue)} : ${formatScore(lastRound?.white)} 백`}</div><div class="next-round-guide"><span class="round-badge">다음 ${nextIndex + 1}라운드 안내</span><h3>${escapeHtml(nextMode?.name || '')}</h3><p>${escapeHtml(getRoundGuide(nextMode))}</p></div><div class="next-countdown">다음 라운드 시작까지 <span id="intermission-time">${getTimeLabel(data.intermissionRemainingMs)}</span></div>${renderAdvanceRoundButton(data)}</section>`;
   }
 
   if (data.phase === 'results') {
+    if (data.sessionMode === 'ai') return `<section class="prompt-card result-card"><span class="round-badge">AI ${data.aiLevel}단계 · 1:1 RESULT</span><h2>${data.winner === data.self.team ? 'AI와의 경기에서 이겼어요!' : 'AI가 이번 경기에서 이겼어요!'}</h2><p>라운드 승수 나 ${data.roundWins.blue} : ${data.roundWins.white} AI</p><div class="solo-actions"><button data-ai-retry="${data.aiLevel}" class="primary-button compact">같은 단계 다시 도전</button>${data.aiLevel < 10 ? `<button data-ai-retry="${data.aiLevel + 1}" class="secondary-button">다음 단계 AI와 붙기</button>` : ''}<button id="restart-button" class="secondary-button">학급 대기실로 돌아가기</button></div></section>`;
     return `<section class="prompt-card result-card"><span class="round-badge">GAME RESULT</span><h2>${teamName(data.winner)} 최종 승리!</h2><p>라운드 승수 청팀 ${data.roundWins?.blue || 0} : ${data.roundWins?.white || 0} 백팀</p><div class="round-results">${(data.roundScores || []).map((round) => `<span>${round.round}R ${escapeHtml(round.mode)} · <b>${teamName(round.winner)} 승</b></span>`).join('')}</div><div class="result-stars">✦ ✦ ✦</div><button id="restart-button" class="primary-button">새 게임 준비하기 <span>↗</span></button></section>`;
   }
 
@@ -983,12 +1025,13 @@ function renderGame() {
   const finalRoundPending = !finalRoundActive && data.roundIndex < 4;
   return `
     <section class="game-page">
+      ${data.sessionMode === 'waiting' ? renderWaitingControls(data) : data.sessionMode === 'ai' ? `<section class="ai-match-status panel-card"><div><div class="section-kicker">AI MATCH · 1:1</div><h2>AI ${data.aiLevel}단계 · ${escapeHtml(getAiLevel(data.aiLevel)?.label || '')}</h2><p>청팀은 나, 백팀은 AI예요. ${data.playMode === 'tablet' ? '보기 4개를 터치해' : '네 종목의 문제를 풀어'} 겨뤄 보세요.</p></div><button id="return-lobby-button" type="button" class="secondary-button">학급 대기실로 돌아가기</button></section>` : ''}
       <div class="game-heading"><div><div class="section-kicker">HANGUL DAY MATCH · ${data.roundNumber === 5 ? '결승 5라운드' : `${Math.max(1, data.roundNumber)}라운드`}</div><h1>${escapeHtml(data.mode?.name || '말모이 줄다리기')}</h1><p>${escapeHtml(data.mode?.description || '한글의 힘으로 줄을 당겨요.')}</p></div>${renderGameIdentity(data)}</div>
       ${renderScoreboard(data)}
       ${renderScoreSettings(data)}
       ${renderArena(data)}
       <div id="prompt-root">${renderPrompt(data)}</div>
-      <div class="round-strip">${(data.roundModes || roundModes).map((mode, index) => `<span class="round-chip ${index === data.roundIndex ? 'is-active' : index < data.roundIndex ? 'is-done' : ''}"><b>${index + 1}</b>${escapeHtml(mode.name || modeLabels[mode.id])}${data.roundScores?.[index] ? ` · ${teamName(data.roundScores[index].winner)} 승` : ''}</span>`).join('')}<span class="round-chip round-chip--final ${finalRoundActive ? 'is-active' : ''} ${finalRoundPending ? 'is-optional' : ''}" title="1~4라운드가 2:2로 끝나면 열립니다"><b>5</b>돌림판 결승${finalRoundPending ? ' · 2:2일 때' : ''}</span></div>
+      ${data.sessionMode === 'waiting' ? '' : `<div class="round-strip">${(data.roundModes || roundModes).map((mode, index) => `<span class="round-chip ${index === data.roundIndex ? 'is-active' : index < data.roundIndex ? 'is-done' : ''}"><b>${index + 1}</b>${escapeHtml(mode.name || modeLabels[mode.id])}${data.roundScores?.[index] ? ` · ${teamName(data.roundScores[index].winner)} 승` : ''}</span>`).join('')}<span class="round-chip round-chip--final ${finalRoundActive ? 'is-active' : ''} ${finalRoundPending ? 'is-optional' : ''}" title="1~4라운드가 2:2로 끝나면 열립니다"><b>5</b>돌림판 결승${finalRoundPending ? ' · 2:2일 때' : ''}</span></div>`}
     </section>
   `;
 }
@@ -999,12 +1042,13 @@ function render() {
   pendingDraftReset = false;
   const data = state.data;
   const inRoomPhase = Boolean(data?.phase && state.joined && data.phase !== 'lobby');
-  const isGame = inRoomPhase && !['placement', 'teamReveal'].includes(data.phase);
+  const waitingGuest = data?.sessionMode === 'waiting' && !data.self?.isHost;
+  const isGame = inRoomPhase && !waitingGuest && !['placement', 'teamReveal'].includes(data.phase);
   if (tugScene) {
     tugScene.dispose();
     tugScene = null;
   }
-  const page = !inRoomPhase ? renderLobby()
+  const page = waitingGuest ? renderWaitingGuest(data) : !inRoomPhase ? renderLobby()
     : data.phase === 'placement' ? renderPlacement(data)
       : data.phase === 'teamReveal' ? renderTeamReveal(data)
         : renderGame();
@@ -1031,6 +1075,13 @@ function render() {
 }
 
 function bindEvents() {
+  document.querySelector('#ai-level-select')?.addEventListener('change', (event) => { state.selectedAiLevel = Number(event.target.value); });
+  document.querySelector('#start-waiting-button')?.addEventListener('click', () => send({ type: 'startWaiting' }));
+  document.querySelector('#start-ai-button')?.addEventListener('click', () => send({ type: 'startAI', level: Number(document.querySelector('#ai-level-select')?.value || 1) }));
+  document.querySelector('#return-lobby-button')?.addEventListener('click', restartGame);
+  document.querySelectorAll('[data-waiting-round]').forEach((button) => button.addEventListener('click', () => send({ type: 'selectWaitingRound', roundIndex: Number(button.dataset.waitingRound) })));
+  const previewVideo = document.querySelector('#hero-preview-video');
+  if (previewVideo && window.matchMedia('(prefers-reduced-motion: reduce)').matches) previewVideo.pause();
   document.querySelectorAll('[data-score-multiplier]').forEach((button) => {
     button.addEventListener('click', () => {
       if (!state.connected || !state.data?.self?.isHost) return;
@@ -1068,6 +1119,7 @@ function bindEvents() {
 }
 
 function bindPromptEvents(root) {
+  root.querySelectorAll('[data-ai-retry]').forEach((button) => button.addEventListener('click', () => send({ type: 'startAI', level: Number(button.dataset.aiRetry) })));
   const boundPrompt = state.data?.prompt;
   const boundPhase = state.data?.phase;
   const boundRoundIndex = state.data?.roundIndex;
