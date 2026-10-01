@@ -1,6 +1,7 @@
 import { WORD_PROMPTS, WORD_QUIZ_PROMPTS, HANGUL_CREATION_QUIZ_PROMPTS } from './quiz-prompts.js';
 import { MAX_CSV_BYTES, validateCustomQuestions } from '../shared/question-csv.js';
 import { SCORE_MULTIPLIER_LEVELS, SCORE_SETTING_PHASES, ANSWER_REVIEW_MS } from '../shared/score-settings.js';
+import { HOST_PARTICIPATION_OPTIONS } from '../shared/teacher-participation.js';
 import { createServer } from 'node:http';
 import { existsSync } from 'node:fs';
 import { readFile, stat } from 'node:fs/promises';
@@ -22,10 +23,10 @@ const QUIZ_WRONG_PENALTY = 30;
 const RELAY_DUEL_PAUSE_MS = Number(process.env.RELAY_DUEL_PAUSE_MS ?? 1_800);
 const ROUND_MULTIPLIERS = [1, 1.1, 1.3, 1.5, 1.5];
 const ROUND_DURATION_MS = Number(process.env.ROUND_DURATION_MS || 180_000);
-const ROUND_INTRO_MS = Number(process.env.ROUND_INTRO_MS ?? 5_000);
+const ROUND_INTRO_MS = Number(process.env.ROUND_INTRO_MS ?? 15_000);
 const OVERTIME_MS = Number(process.env.OVERTIME_MS || 10_000);
 const MAX_RELAY_OVERTIMES = 2;
-const INTERMISSION_MS = Number(process.env.INTERMISSION_MS || 4_000);
+const INTERMISSION_MS = Number(process.env.INTERMISSION_MS ?? 15_000);
 const WHEEL_DURATION_MS = Number(process.env.WHEEL_DURATION_MS || 7_000);
 const PLACEMENT_MS = Number(process.env.PLACEMENT_MS || 30_000);
 const TEAM_REVEAL_MS = Number(process.env.TEAM_REVEAL_MS || 7_000);
@@ -167,10 +168,16 @@ function correctKeystrokes(input, expected) {
 
 // Strongest typists pick first; each one joins the weaker team that still has
 // room, so team sizes differ by at most one and total speed stays close.
-function assignTeamsBySkill(players) {
+function assignTeamsBySkill(players, hostTeam) {
   const maxSize = Math.ceil(players.length / 2);
   const teams = { blue: { size: 0, total: 0 }, white: { size: 0, total: 0 } };
-  const ranked = players.map((player, order) => ({ player, order }))
+  const host = hostTeam ? players.find((player) => player.isHost) : null;
+  if (host) {
+    host.team = hostTeam;
+    teams[hostTeam].size = 1;
+    teams[hostTeam].total = host.typingSpeed;
+  }
+  const ranked = players.filter((player) => player !== host).map((player, order) => ({ player, order }))
     .sort((a, b) => (b.player.typingSpeed - a.player.typingSpeed) || (a.order - b.order));
   for (const { player } of ranked) {
     const open = ['blue', 'white'].filter((team) => teams[team].size < maxSize);
@@ -283,10 +290,11 @@ function createRoomId() {
   return roomId;
 }
 
-function createRoom(playMode = 'typing') {
+function createRoom(playMode = 'typing', hostParticipation = 'auto') {
   const room = {
     id: createRoomId(),
     playMode,
+    hostParticipation,
     scoreMultiplier: 1,
     customQuestions: null,
     customModes: null,
@@ -340,6 +348,18 @@ function getActivePlayers(room) {
   return [...room.players.values()].filter((player) => !player.spectator);
 }
 
+function getHostTeam(room) {
+  return ['blue', 'white'].includes(room.hostParticipation) ? room.hostParticipation : null;
+}
+
+function applyHostParticipation(room, player) {
+  if (!player.isHost) return;
+  player.spectator = room.hostParticipation === 'observe';
+  player.team = player.spectator ? null : getHostTeam(room) || player.team || (getCounts(room).blue <= getCounts(room).white ? 'blue' : 'white');
+  player.progress = player.spectator ? null : player.progress || { promptIndex: 0, promptStartedAt: Date.now() };
+  player.roundDraft = null;
+}
+
 function getCounts(room) {
   const game = room.game;
   if (game.phase !== 'lobby' && game.rosterCounts.blue + game.rosterCounts.white > 0) {
@@ -347,7 +367,7 @@ function getCounts(room) {
   }
 
   return getActivePlayers(room).reduce((counts, player) => {
-    counts[player.team] += 1;
+    if (player.team === 'blue' || player.team === 'white') counts[player.team] += 1;
     return counts;
   }, { blue: 0, white: 0 });
 }
@@ -388,6 +408,7 @@ function getMode(room) {
 
 function getPromptFor(room, player) {
   const game = room.game;
+  if (!player || player.spectator) return null;
   if (game.phase === 'lobby' && player?.progress) {
     if (room.playMode === 'tablet') return null;
     const { id, prompt } = currentPracticePrompt(player.progress);
@@ -453,6 +474,7 @@ function publicStateFor(room, player) {
     type: 'state',
     roomId: room.id,
     playMode: room.playMode,
+    hostParticipation: room.hostParticipation,
     scoreMultiplier: room.scoreMultiplier,
     roundModes: getModes(room),
     questionSet: { fileName: room.customQuestions?.fileName || '', count: room.customQuestions?.questions.length || 0, revision: room.questionRevision },
@@ -469,6 +491,7 @@ function publicStateFor(room, player) {
     roundIntroRemainingMs: game.phase === 'roundIntro' ? Math.max(0, game.roundIntroUntil - Date.now()) : 0,
     roundIntroDurationMs: ROUND_INTRO_MS,
     intermissionRemainingMs: game.phase === 'intermission' ? Math.max(0, game.intermissionUntil - Date.now()) : 0,
+    intermissionDurationMs: INTERMISSION_MS,
     wheelRemainingMs: game.phase === 'wheel' ? Math.max(0, game.wheelEndsAt - Date.now()) : 0,
     placementRemainingMs: game.phase === 'placement' ? Math.max(0, game.placementEndsAt - Date.now()) : 0,
     placementDurationMs: PLACEMENT_MS,
@@ -860,7 +883,7 @@ function finishPlacement(room) {
   for (const player of players) {
     player.typingSpeed = Math.round((player.placementKeystrokes || 0) / minutes);
   }
-  assignTeamsBySkill(players);
+  assignTeamsBySkill(players, getHostTeam(room));
   game.rosterCounts = getActivePlayers(room).reduce((counts, player) => {
     counts[player.team] += 1;
     return counts;
@@ -896,7 +919,7 @@ function handlePracticeAnswer(room, player, answer) {
 
 function handleTypedAnswer(player, answer) {
   const room = getRoomForPlayer(player);
-  if (!room) return;
+  if (!room || player.spectator) return;
   if (room.playMode === 'tablet') return;
   const game = room.game;
   if (game.phase === 'lobby') return handlePracticeAnswer(room, player, answer);
@@ -940,7 +963,7 @@ function handleTypedAnswer(player, answer) {
 
 function handleChoice(player, choice, promptId) {
   const room = getRoomForPlayer(player);
-  if (!room) return;
+  if (!room || player.spectator || !player.progress || !player.team) return;
   const game = room.game;
   if (game.phase !== 'round' || getMode(room)?.id !== 'quiz') return;
   if (Date.now() >= game.roundEndsAt) return finishRound(room);
@@ -1033,8 +1056,8 @@ function startGame(player) {
   if (!room) return;
   const game = room.game;
   if (!player.isHost || game.phase !== 'lobby') return;
-  if (room.players.size < 2) {
-    send(player.ws, { type: 'error', message: '두 명 이상 모여야 팀을 나누고 시작할 수 있어요.' });
+  if (getActivePlayers(room).length < 2) {
+    send(player.ws, { type: 'error', message: '경기에 참가하는 사람이 두 명 이상 있어야 시작할 수 있어요. 진행만 하는 선생님은 참가 인원에서 제외해요.' });
     return;
   }
 
@@ -1045,16 +1068,26 @@ function startGame(player) {
   room.game.placementEndsAt = now + PLACEMENT_MS;
   room.game.notice = '타자 실력을 재고 있어요. 문장을 정확하게 입력해 주세요!';
   for (const entry of room.players.values()) {
-    entry.spectator = false;
-    entry.progress = { promptIndex: 0, promptStartedAt: now };
+    entry.spectator = entry.isHost && room.hostParticipation === 'observe';
+    entry.progress = entry.spectator ? null : { promptIndex: 0, promptStartedAt: now };
+    if (entry.spectator) entry.team = null;
     entry.placementKeystrokes = 0;
     entry.typingSpeed = null;
     entry.scoreCount = 0;
   }
   if (room.playMode === 'tablet') {
     const players = getActivePlayers(room);
-    const order = shuffledIndexes(players.length);
-    order.forEach((playerIndex, index) => { players[playerIndex].team = index % 2 === 0 ? 'blue' : 'white'; });
+    const hostTeam = getHostTeam(room);
+    const fixedHost = hostTeam ? players.find((entry) => entry.isHost) : null;
+    const remaining = players.filter((entry) => entry !== fixedHost);
+    const counts = { blue: 0, white: 0 };
+    if (fixedHost) { fixedHost.team = hostTeam; counts[hostTeam] = 1; }
+    const order = shuffledIndexes(remaining.length);
+    order.forEach((playerIndex) => {
+      const team = counts.blue <= counts.white ? 'blue' : 'white';
+      remaining[playerIndex].team = team;
+      counts[team] += 1;
+    });
     room.game.phase = 'teamReveal';
     room.game.teamRevealUntil = now + TEAM_REVEAL_MS;
     room.game.rosterCounts = getCounts(room);
@@ -1072,6 +1105,7 @@ function resetToLobby(player) {
     entry.spectator = false;
     entry.progress = { promptIndex: 0, promptStartedAt: Date.now() };
     entry.practiceCount = 0;
+    applyHostParticipation(room, entry);
   }
   broadcast(room);
 }
@@ -1120,6 +1154,7 @@ function joinPlayer(ws, message) {
     practiceCount: 0,
   };
   room.players.set(player.id, player);
+  applyHostParticipation(room, player);
   socketRooms.set(ws, roomId);
   send(ws, { type: 'joined', roomId, roomUrl: getRoomUrl(roomId), player: { id: player.id, name: player.name, team: player.team, characterId: player.characterId, isHost: player.isHost } });
   broadcast(room);
@@ -1141,9 +1176,38 @@ function createRoomAndJoin(ws, message) {
     send(ws, { type: 'error', message: '방 모드를 다시 선택해 주세요.' });
     return;
   }
-  const room = createRoom(message.playMode || 'typing');
+  if (message.hostParticipation !== undefined && !HOST_PARTICIPATION_OPTIONS.some((option) => option.value === message.hostParticipation)) {
+    send(ws, { type: 'error', message: '선생님 참가 방식을 다시 선택해 주세요.' });
+    return;
+  }
+  const room = createRoom(message.playMode || 'typing', message.hostParticipation || 'auto');
   send(ws, { type: 'roomCreated', roomId: room.id, roomUrl: getRoomUrl(room.id) });
   joinPlayer(ws, { ...message, name, roomId: room.id });
+}
+
+function advanceRound(player, message) {
+  const room = getRoomForPlayer(player);
+  if (!room) return;
+  if (!player.isHost) {
+    send(player.ws, { type: 'error', message: '선생님(방장)만 다음 라운드를 바로 시작할 수 있어요.' });
+    return;
+  }
+  const game = room.game;
+  // A delayed click or double tap must never skip a later round's explanation.
+  if (!['intermission', 'roundIntro'].includes(game.phase) || message.phase !== game.phase || message.roundIndex !== game.roundIndex) return;
+  beginRound(room, game.phase === 'intermission' ? game.roundIndex + 1 : game.roundIndex);
+}
+
+function updateHostParticipation(player, message) {
+  const room = getRoomForPlayer(player);
+  if (!room) return;
+  const fail = (text) => send(player.ws, { type: 'error', message: text });
+  if (!player.isHost) return fail('선생님(방장)만 참가 방식을 바꿀 수 있어요.');
+  if (room.game.phase !== 'lobby') return fail('선생님 참가 방식은 게임 시작 전 대기실에서 바꿔 주세요.');
+  if (!HOST_PARTICIPATION_OPTIONS.some((option) => option.value === message.participation)) return fail('선생님 참가 방식을 다시 선택해 주세요.');
+  room.hostParticipation = message.participation;
+  applyHostParticipation(room, player);
+  broadcast(room);
 }
 
 function updateScoreMultiplier(player, message) {
@@ -1206,6 +1270,8 @@ function handleMessage(ws, rawMessage) {
 
   if (message.type === 'uploadQuestions' || message.type === 'clearQuestions') return updateRoomQuestions(player, message);
   if (message.type === 'setScoreMultiplier') return updateScoreMultiplier(player, message);
+  if (message.type === 'setHostParticipation') return updateHostParticipation(player, message);
+  if (message.type === 'advanceRound') return advanceRound(player, message);
   if (message.type === 'start') return startGame(player);
   if (message.type === 'restart') return resetToLobby(player);
   if (message.type === 'answer') return handleTypedAnswer(player, message.answer);
@@ -1226,7 +1292,7 @@ function tick() {
     } else if (game.phase === 'teamReveal' && now >= game.teamRevealUntil) {
       queueRound(room, 0);
     } else if (game.phase === 'intermission' && now >= game.intermissionUntil) {
-      queueRound(room, game.roundIndex + 1);
+      beginRound(room, game.roundIndex + 1);
     } else if (game.phase === 'wheel' && now >= game.wheelEndsAt) {
       queueRound(room, MODES.length);
     } else if (game.phase === 'roundIntro' && now >= game.roundIntroUntil) {
@@ -1302,7 +1368,10 @@ websocketServer.on('connection', (ws) => {
     socketRooms.delete(ws);
     if (room.game.phase === 'lobby' && player.isHost) {
       const nextHost = room.players.values().next().value;
-      if (nextHost) nextHost.isHost = true;
+      if (nextHost) {
+        nextHost.isHost = true;
+        room.hostParticipation = nextHost.spectator ? 'observe' : 'auto';
+      }
     }
     if (room.players.size === 0) rooms.delete(room.id);
     else broadcast(room);

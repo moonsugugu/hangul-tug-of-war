@@ -46,10 +46,15 @@ function watch(socket) {
   };
 }
 
-async function setup(t, port, duration) {
+async function setup(t, port, duration, timing = {}) {
+  const env = { ...process.env, PORT: String(port), ROUND_DURATION_MS: String(duration), ROUND_INTRO_MS: '50', INTERMISSION_MS: '50', WHEEL_DURATION_MS: '50', PLACEMENT_MS: '100', TEAM_REVEAL_MS: '50', RELAY_DUEL_PAUSE_MS: '50' };
+  for (const [key, value] of Object.entries(timing)) {
+    if (value === null) delete env[key];
+    else env[key] = String(value);
+  }
   const server = spawn(process.execPath, ['server/index.js'], {
     cwd: new URL('..', import.meta.url),
-    env: { ...process.env, PORT: String(port), ROUND_DURATION_MS: String(duration), ROUND_INTRO_MS: '50', INTERMISSION_MS: '50', PLACEMENT_MS: '50', TEAM_REVEAL_MS: '50', RELAY_DUEL_PAUSE_MS: '50' },
+    env,
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   t.after(() => server.kill());
@@ -192,4 +197,202 @@ test('배율은 타자·시간 종료 부분 점수·릴레이 대표/응원에�
   assert.equal((await feedback).scoreMultiplier, 2);
   const supported = await host.waitState((state) => state.scores[representative.state.self.team] === 1_052);
   assert.equal(supported.phase, 'round', '배율이 커져도 릴레이는 시간까지 진행해요');
+});
+
+async function addStudents(connect, roomId, count = 2) {
+  const clients = [];
+  for (let index = 0; index < count; index++) {
+    const client = await connect();
+    client.send({ type: 'join', roomId, name: `학생${index + 1}` });
+    await client.waitState((state) => state.self);
+    clients.push(client);
+  }
+  return clients;
+}
+
+test('진행만 하는 선생님이 양 팀 학생 전체의 배율을 바꾸며 4라운드·결승을 진행해요', async (t) => {
+  const connect = await setup(t, 18794, 1_400);
+  const host = await connect();
+  host.send({ type: 'createRoom', name: '진행 선생님', playMode: 'tablet', hostParticipation: 'observe' });
+  const lobby = await host.waitState((state) => state.self);
+  assert.equal(lobby.self.spectator, true);
+  assert.equal(lobby.self.team, null);
+  assert.equal(lobby.prompt, null);
+  const students = await addStudents(connect, lobby.roomId, 1);
+  let error = host.wait((message) => message.type === 'error');
+  host.send({ type: 'start' });
+  assert.match((await error).message, /두 명 이상/);
+  students.push(...await addStudents(connect, lobby.roomId, 1));
+  error = students[0].wait((message) => message.type === 'error');
+  students[0].send({ type: 'setHostParticipation', participation: 'blue' });
+  assert.match((await error).message, /방장/);
+  error = host.wait((message) => message.type === 'error');
+  host.send({ type: 'setHostParticipation', participation: 'invalid' });
+  assert.match((await error).message, /다시 선택/);
+  host.send({ type: 'start' });
+  const round = await host.waitState((state) => state.phase === 'round');
+  assert.deepEqual(round.counts, { blue: 1, white: 1 }, '선생님을 팀 인원에서 제외해요');
+  assert.deepEqual(round.multipliers, { blue: 1, white: 1 });
+  assert.equal(round.prompt, null);
+  await Promise.all(students.map((client) => client.waitState((state) => state.phase === 'round')));
+  host.send({ type: 'choice', promptId: students[0].state.prompt.id, choice: quizAnswer(students[0].state.prompt) });
+  host.send({ type: 'answer', answer: '몰래 참가' });
+  host.send({ type: 'draft', promptId: students[0].state.prompt.id, text: '몰래 참가' });
+  await host.setMultiplier(3);
+  assert.deepEqual(host.state.scores, { blue: 0, white: 0 }, '진행자는 답안을 보내도 점수를 얻지 못해요');
+  for (const student of students) {
+    await student.waitState((state) => state.scoreMultiplier === 3);
+    const answer = await student.choose(quizAnswer(student.state.prompt));
+    approximately(answer.next.scores[answer.next.self.team], answer.result.score * 3);
+    assert.equal(answer.result.scoreMultiplier, 3, '양 팀 학생 모두 전체 배율로 채점해요');
+  }
+  await host.waitState((state) => state.scores.blue > 0 && state.scores.white > 0);
+  const previous = { ...host.state.scores };
+  await host.setMultiplier(7);
+  await students[0].waitState((state) => state.scoreMultiplier === 7);
+  assert.deepEqual(host.state.scores, previous);
+  const fast = await students[0].choose(quizAnswer(students[0].state.prompt));
+  approximately(fast.next.scores[fast.next.self.team], previous[fast.next.self.team] + fast.result.score * 7);
+  error = host.wait((message) => message.type === 'error');
+  host.send({ type: 'setHostParticipation', participation: 'blue' });
+  assert.match((await error).message, /시작 전/);
+  await host.waitState((state) => state.phase === 'intermission' && state.roundIndex === 0);
+  for (let index = 1; index < 4; index++) {
+    const winner = students[index % 2];
+    await winner.waitState((state) => state.phase === 'round' && state.roundIndex === index);
+    await winner.choose(quizAnswer(winner.state.prompt));
+    const finished = await host.waitState((state) => state.roundIndex === index && ['intermission', 'wheel'].includes(state.phase));
+    assert.equal(finished.self.team, null);
+    assert.equal(finished.prompt, null);
+  }
+  await students[0].waitState((state) => state.phase === 'round' && state.roundIndex === 4);
+  await students[0].choose(quizAnswer(students[0].state.prompt));
+  const results = await host.waitState((state) => state.phase === 'results');
+  assert.equal(results.roundScores.length, 5);
+  host.send({ type: 'restart' });
+  const restarted = await host.waitState((state) => state.phase === 'lobby');
+  assert.equal(restarted.hostParticipation, 'observe');
+  assert.equal(restarted.self.spectator, true);
+  assert.equal(restarted.self.team, null);
+  assert.equal(restarted.scoreMultiplier, 7);
+});
+
+test('선생님은 청팀·백팀을 선택해 참가하거나 자동 배정·진행만으로 바꿀 수 있어요', async (t) => {
+  const connect = await setup(t, 18795, 1_600);
+  for (const playMode of ['tablet', 'typing']) {
+    for (const team of ['blue', 'white']) {
+      const host = await connect();
+      host.send({ type: 'createRoom', name: '참가 선생님', playMode, hostParticipation: 'observe' });
+      const lobby = await host.waitState((state) => state.self);
+      await addStudents(connect, lobby.roomId);
+      host.send({ type: 'setHostParticipation', participation: team });
+      const playingLobby = await host.waitState((state) => state.hostParticipation === team);
+      assert.equal(playingLobby.self.spectator, false);
+      assert.equal(playingLobby.self.team, team);
+      host.send({ type: 'start' });
+      const round = await host.waitState((state) => state.phase === 'round');
+      assert.equal(round.self.team, team);
+      assert.ok(round.prompt);
+      assert.equal(round.counts.blue + round.counts.white, 3);
+      assert.equal(Math.abs(round.counts.blue - round.counts.white), 1, '팀을 지정해도 인원 배정은 균형을 맞춰요');
+      host.send({ type: 'restart' });
+      const restarted = await host.waitState((state) => state.phase === 'lobby');
+      assert.equal(restarted.hostParticipation, team);
+      host.send({ type: 'setHostParticipation', participation: 'auto' });
+      const auto = await host.waitState((state) => state.hostParticipation === 'auto');
+      assert.equal(auto.self.spectator, false);
+      host.send({ type: 'setHostParticipation', participation: 'observe' });
+      const observing = await host.waitState((state) => state.hostParticipation === 'observe');
+      assert.equal(observing.self.spectator, true);
+      assert.equal(observing.self.team, null);
+      assert.equal(observing.prompt, null);
+    }
+  }
+});
+
+test('진행 선생님은 타자 테스트와 릴레이 대표 선정에서도 제외해요', async (t) => {
+  const connect = await setup(t, 18796, 1_200);
+  const host = await connect();
+  host.send({ type: 'createRoom', name: '미참가 선생님', hostParticipation: 'observe' });
+  const lobby = await host.waitState((state) => state.self);
+  const students = await addStudents(connect, lobby.roomId);
+  host.send({ type: 'start' });
+  const placement = await host.waitState((state) => state.phase === 'placement');
+  assert.equal(placement.prompt, null);
+  host.send({ type: 'answer', answer: '타자 실력 조작' });
+  await students[0].waitState((state) => state.phase === 'round' && state.roundIndex === 0);
+  await host.setMultiplier(4);
+  await students[0].waitState((state) => state.scoreMultiplier === 4);
+  let feedback = students[0].wait((message) => message.type === 'answerResult');
+  students[0].send({ type: 'answer', answer: students[0].state.prompt.word });
+  assert.equal((await feedback).scoreMultiplier, 4);
+  const first = await host.waitState((state) => state.phase === 'intermission');
+  assert.equal(first.self.typingSpeed, null);
+  assert.equal(first.self.placementKeystrokes, 0);
+  await students[1].waitState((state) => state.phase === 'round' && state.roundIndex === 1);
+  await students[1].choose(quizAnswer(students[1].state.prompt));
+  const repair = await students[0].waitState((state) => state.phase === 'round' && state.roundIndex === 2);
+  feedback = students[0].wait((message) => message.type === 'answerResult');
+  students[0].send({ type: 'answer', answer: REPAIR_PROMPTS.find((entry) => entry.question === repair.prompt.question).answer });
+  await feedback;
+  const relay = await host.waitState((state) => state.phase === 'round' && state.roundIndex === 3);
+  assert.notEqual(relay.relay.blueId, relay.self.id);
+  assert.notEqual(relay.relay.whiteId, relay.self.id);
+  assert.equal(relay.prompt, null);
+  host.send({ type: 'relayAnswer', deadline: relay.relay.deadline, answer: relay.relay.prompt });
+  for (const student of students) {
+    await student.waitState((state) => state.phase === 'round' && state.roundIndex === 3);
+    feedback = student.wait((message) => message.type === 'relayAnswerResult');
+    student.send({ type: 'relayAnswer', deadline: relay.relay.deadline, answer: relay.relay.prompt });
+    assert.equal((await feedback).scoreMultiplier, 4);
+  }
+  const duel = await host.waitState((state) => Boolean(state.relay?.lastResult));
+  assert.deepEqual(duel.scores, { blue: 600, white: 600 });
+  assert.equal(duel.self.spectator, true);
+  assert.ok(duel.players.find((player) => player.isHost).scoreCount === 0);
+});
+
+test('설명 대기는 기본 15초, 선생님만 즉시 시작·중복 방지·시간 종료 자동 시작', async (t) => {
+  const connect = await setup(t, 18797, 800, { ROUND_INTRO_MS: null, INTERMISSION_MS: null });
+  const host = await connect();
+  host.send({ type: 'createRoom', name: '라운드 진행 선생님', playMode: 'tablet', hostParticipation: 'observe' });
+  const lobby = await host.waitState((state) => state.self);
+  const students = await addStudents(connect, lobby.roomId);
+  host.send({ type: 'start' });
+  const intro = await host.waitState((state) => state.phase === 'roundIntro');
+  assert.equal(intro.roundIntroDurationMs, 15_000);
+  assert.ok(intro.roundIntroRemainingMs > 14_000);
+  let error = students[0].wait((message) => message.type === 'error');
+  students[0].send({ type: 'advanceRound', phase: intro.phase, roundIndex: intro.roundIndex });
+  assert.match((await error).message, /방장/);
+  const firstRequest = { type: 'advanceRound', phase: intro.phase, roundIndex: intro.roundIndex };
+  host.send(firstRequest);
+  host.send(firstRequest);
+  await students[0].waitState((state) => state.phase === 'round' && state.roundIndex === 0);
+  await students[0].choose(quizAnswer(students[0].state.prompt));
+  const firstBreak = await host.waitState((state) => state.phase === 'intermission' && state.roundIndex === 0);
+  assert.equal(firstBreak.intermissionDurationMs, 15_000);
+  assert.ok(firstBreak.intermissionRemainingMs > 14_000);
+  assert.equal(firstBreak.roundModes[1].name, '한글 창제 원리');
+  error = students[0].wait((message) => message.type === 'error');
+  students[0].send({ type: 'advanceRound', phase: firstBreak.phase, roundIndex: firstBreak.roundIndex });
+  assert.match((await error).message, /방장/);
+  const breakRequest = { type: 'advanceRound', phase: firstBreak.phase, roundIndex: firstBreak.roundIndex };
+  const advancedAt = Date.now();
+  host.send(breakRequest);
+  host.send(breakRequest);
+  await students[1].waitState((state) => state.phase === 'round' && state.roundIndex === 1);
+  assert.ok(Date.now() - advancedAt < 1_000, '추가 대기 없이 다음 라운드를 바로 시작해요');
+  await students[1].choose(quizAnswer(students[1].state.prompt));
+  const secondBreak = await host.waitState((state) => state.phase === 'intermission' && state.roundIndex === 1);
+  const waitingStartedAt = Date.now();
+  host.send(breakRequest);
+  const waiting = await host.wait((message) => message.type === 'state');
+  assert.equal(waiting.phase, 'intermission', '이전 라운드의 늦은 클릭은 다음 대기를 건너뛰지 못해요');
+  assert.equal(waiting.roundIndex, 1);
+  const started = await host.wait((message) => message.type === 'state' && message.phase === 'round' && message.roundIndex === 2, 17_000);
+  assert.ok(Date.now() - waitingStartedAt >= 14_000, '설명을 읽을 15초 대기를 보장해요');
+  assert.ok(secondBreak.intermissionRemainingMs > 14_000);
+  assert.equal(started.mode.name, '세종대왕 이야기');
+  assert.deepEqual(started.scores, { blue: 0, white: 0 });
 });

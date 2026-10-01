@@ -269,6 +269,21 @@ main { width: min(1180px, calc(100% - 36px)); margin: 0 auto 60px; }
 .play-mode-picker p { margin: 10px 0 0; }
 .teacher-settings { margin-bottom: 18px; border-radius: 20px; padding: 18px 22px; }
 .score-settings { margin: 16px 0; padding: 18px 22px; border-radius: 20px; }
+.teacher-participation { margin: 18px 0; padding: 0; border: 0; }
+.teacher-participation legend { font-weight: 700; font-size: 20px; }
+.teacher-participation-options { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; margin-top: 12px; }
+.teacher-participation-options label { display: flex; gap: 10px; align-items: center; min-height: 48px; padding: 12px; border: 1px solid var(--line); border-radius: 12px; cursor: pointer; }
+.teacher-participation-options label:has(input:checked) { border-color: var(--blue); background: var(--blue-soft); }
+.teacher-participation-options input { width: 18px; height: 18px; margin: 0; accent-color: var(--blue); flex-shrink: 0; }
+.observer-card { padding: 24px; margin: 18px 0; border-radius: 20px; }
+.observer-card h2 { margin: 10px 0; font-size: 24px; }
+.observer-card p { color: var(--muted); line-height: 1.7; }
+.next-round-guide { margin: 18px 0; padding: 18px; border: 1px solid var(--line); border-radius: 16px; background: var(--blue-soft); }
+.next-round-guide h3 { margin: 12px 0; font-size: 24px; }
+.next-round-guide p { line-height: 1.7; }
+#advance-round-button { margin-top: 18px; min-height: 48px; }
+.my-team-chip--observer { border-color: var(--line); background: var(--paper); color: var(--ink); }
+.my-team-chip--observer > span { color: white; background: var(--ink); font-size: 17px; }
 .score-settings-heading { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
 .score-settings-heading h2 { margin: 0; font-size: 18px; }
 .score-settings-heading strong, .score-setting-summary strong { color: var(--blue-dark); }
@@ -432,9 +447,11 @@ button:disabled { cursor: wait; opacity: .65; }
 .team-reveal-card { margin-bottom: 18px; padding: 34px 24px; border: 3px solid; border-radius: 26px; text-align: center; box-shadow: var(--shadow); animation: revealIn .45s ease-out; }
 .team-reveal-card--blue { border-color: var(--blue); background: var(--blue-soft); }
 .team-reveal-card--white { border-color: #d9a441; background: var(--white-team); }
+.team-reveal-card--observer { border-color: var(--line); background: var(--paper); }
 .team-reveal-seal { width: 86px; height: 86px; display: grid; place-items: center; margin: 12px auto 6px; border-radius: 26px; font-family: 'Jua', sans-serif; font-size: 50px; }
 .team-reveal-card--blue .team-reveal-seal { color: white; background: var(--blue); }
 .team-reveal-card--white .team-reveal-seal { background: var(--yellow); }
+.team-reveal-card--observer .team-reveal-seal { color: white; background: var(--ink); font-size: 32px; }
 .team-reveal-card h1 { margin: 8px 0; font-family: 'Jua', sans-serif; font-size: clamp(30px, 6vw, 52px); font-weight: 400; }
 .team-reveal-card--blue h1 em { color: var(--blue-dark); font-style: normal; }
 .team-reveal-card--white h1 em { color: #b36d17; font-style: normal; }
