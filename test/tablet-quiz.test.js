@@ -4,6 +4,7 @@ import { spawn } from 'node:child_process';
 import { setTimeout as delay } from 'node:timers/promises';
 import { WebSocket } from 'ws';
 import { WORD_QUIZ_PROMPTS, HANGUL_CREATION_QUIZ_PROMPTS } from '../server/quiz-prompts.js';
+import { ANSWER_REVIEW_MS } from '../shared/score-settings.js';
 
 const PORT = 18788;
 const questions = [...WORD_QUIZ_PROMPTS, ...HANGUL_CREATION_QUIZ_PROMPTS];
@@ -27,7 +28,7 @@ function watch(socket) {
     send(message) { socket.send(JSON.stringify(message)); },
     get state() { return state; },
     get messages() { return messages; },
-    wait(predicate, timeout = 6_000) {
+    wait(predicate, timeout = 9_000) {
       return new Promise((resolve, reject) => {
         const timer = setTimeout(() => { listeners.delete(check); reject(new Error(`대기 실패: ${state?.phase}, ${state?.roundIndex}`)); }, timeout);
         function check(message) {
@@ -49,7 +50,7 @@ function watch(socket) {
 test('태블릿 객관식: 타자 없이 4라운드와 결승, 감점·속도 보너스·중복 방지', async (t) => {
   const server = spawn(process.execPath, ['server/index.js'], {
     cwd: new URL('..', import.meta.url),
-    env: { ...process.env, PORT: String(PORT), ROUND_DURATION_MS: '2400', ROUND_INTRO_MS: '100', INTERMISSION_MS: '100', WHEEL_DURATION_MS: '100', TEAM_REVEAL_MS: '100' },
+    env: { ...process.env, PORT: String(PORT), ROUND_DURATION_MS: '6500', ROUND_INTRO_MS: '100', INTERMISSION_MS: '100', WHEEL_DURATION_MS: '100', TEAM_REVEAL_MS: '100' },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   t.after(() => server.kill());
@@ -111,12 +112,18 @@ test('태블릿 객관식: 타자 없이 4라운드와 결승, 감점·속도 �
   let submitted = await choose(host, current, wrong, true);
   assert.equal(submitted.result.correct, false);
   assert.equal(submitted.result.score, -30);
+  assert.equal(submitted.result.submittedAnswer, wrong);
+  assert.ok(submitted.result.explanation, '오답 팝업에 문제 해설을 제공해요');
   assert.equal(submitted.next.scores[team], -30, '0점에서도 실제 감점해요');
   const resultCount = host.messages.filter((message) => message.type === 'choiceResult').length;
   current = submitted.next;
   const duplicateCheck = await host.wait((message) => message.type === 'state');
   assert.equal(duplicateCheck.prompt.id, current.prompt.id);
   assert.equal(host.messages.filter((message) => message.type === 'choiceResult').length, resultCount, '연속 터치는 한 번만 채점해요');
+  host.send({ type: 'choice', promptId: current.prompt.id, choice: answerFor(current.prompt) });
+  await delay(100);
+  assert.equal(host.messages.filter((message) => message.type === 'choiceResult').length, resultCount, '3초 복습 중에는 다음 답안을 채점하지 않아요');
+  await delay(ANSWER_REVIEW_MS);
 
   submitted = await choose(host, current, answerFor(current.prompt));
   const fastScore = submitted.result.score;

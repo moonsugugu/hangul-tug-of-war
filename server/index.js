@@ -1,5 +1,6 @@
 import { WORD_PROMPTS, WORD_QUIZ_PROMPTS, HANGUL_CREATION_QUIZ_PROMPTS } from './quiz-prompts.js';
 import { MAX_CSV_BYTES, validateCustomQuestions } from '../shared/question-csv.js';
+import { SCORE_MULTIPLIER_LEVELS, SCORE_SETTING_PHASES, ANSWER_REVIEW_MS } from '../shared/score-settings.js';
 import { createServer } from 'node:http';
 import { existsSync } from 'node:fs';
 import { readFile, stat } from 'node:fs/promises';
@@ -208,16 +209,16 @@ const PLACEMENT_PROMPTS = [
 
 const MODES = [
   { id: 'word', name: '말모이 기본전', description: '더 다양해진 순우리말을 빠르고 정확하게 입력해요.', duration: ROUND_DURATION_MS },
-  { id: 'quiz', name: '뜻풀이 객관식 역전전', description: '네 가지 보기로 순우리말과 한글 역사를 풀어요. 오답은 30점 감점!', duration: ROUND_DURATION_MS },
+  { id: 'quiz', name: '뜻풀이 객관식 역전전', description: '네 가지 보기로 순우리말과 한글 역사를 풀어요. 기본 오답은 30점 감점, 설정한 점수 배율을 곱해요!', duration: ROUND_DURATION_MS },
   { id: 'repair', name: '바른말 수리공', description: '띄어쓰기를 제대로 해서 바른 문장을 완성해요.', duration: ROUND_DURATION_MS },
-  { id: 'relay', name: '훈민정음 랜덤 릴레이', description: '대표가 정답을 맞히면 줄을 2칸 당기고, 친구들의 정답은 1점씩 보태요.', duration: ROUND_DURATION_MS },
+  { id: 'relay', name: '훈민정음 랜덤 릴레이', description: '기본 대표 정답은 줄 2칸, 친구들의 정답은 1점! 설정한 점수 배율을 곱해요.', duration: ROUND_DURATION_MS },
 ];
 
 const TABLET_MODES = [
   { id: 'quiz', pool: 'words', name: '순우리말 뜻풀이', description: '뜻을 읽고 알맞은 순우리말을 터치해요.', duration: ROUND_DURATION_MS },
   { id: 'quiz', pool: 'principles', name: '한글 창제 원리', description: '자음과 모음에 담긴 원리를 보기 네 개로 풀어요.', duration: ROUND_DURATION_MS },
   { id: 'quiz', pool: 'sejong', name: '세종대왕 이야기', description: '세종대왕과 훈민정음 이야기를 터치로 풀어요.', duration: ROUND_DURATION_MS },
-  { id: 'quiz', name: '말모이 종합 퀴즈', description: '순우리말과 한글 이야기를 함께 풀어요. 빠른 정답은 보너스, 오답은 30점 감점!', duration: ROUND_DURATION_MS },
+  { id: 'quiz', name: '말모이 종합 퀴즈', description: '순우리말과 한글 이야기를 함께 풀어요. 빠른 정답은 보너스, 기본 오답 감점은 30점이에요.', duration: ROUND_DURATION_MS },
 ];
 const TABLET_QUIZ_POOLS = {
   words: WORD_QUIZ_PROMPTS,
@@ -286,6 +287,7 @@ function createRoom(playMode = 'typing') {
   const room = {
     id: createRoomId(),
     playMode,
+    scoreMultiplier: 1,
     customQuestions: null,
     customModes: null,
     questionRevision: 0,
@@ -451,6 +453,7 @@ function publicStateFor(room, player) {
     type: 'state',
     roomId: room.id,
     playMode: room.playMode,
+    scoreMultiplier: room.scoreMultiplier,
     roundModes: getModes(room),
     questionSet: { fileName: room.customQuestions?.fileName || '', count: room.customQuestions?.questions.length || 0, revision: room.questionRevision },
     roomUrl: getRoomUrl(room.id),
@@ -557,7 +560,7 @@ function checkRopeWin(room) {
 function addTeamScore(room, team, score, checkWin = true) {
   const game = room.game;
   const multiplier = getMultipliers(room)[team];
-  const weighted = Math.max(0, score) * ROUND_MULTIPLIERS[game.roundIndex];
+  const weighted = Math.max(0, score) * ROUND_MULTIPLIERS[game.roundIndex] * room.scoreMultiplier;
   game.rawScores[team] += weighted;
   game.scores[team] += weighted * multiplier;
 
@@ -566,7 +569,7 @@ function addTeamScore(room, team, score, checkWin = true) {
 
 function subtractTeamScore(room, team, points) {
   const game = room.game;
-  const penalty = Math.max(0, points);
+  const penalty = Math.max(0, points) * room.scoreMultiplier;
   if (!penalty) return;
   game.rawScores[team] -= penalty / getMultipliers(room)[team];
   game.scores[team] -= penalty;
@@ -574,11 +577,11 @@ function subtractTeamScore(room, team, points) {
 }
 
 function addRelayScore(room, team, score) {
-  const points = Math.max(0, score);
+  const points = Math.max(0, score) * room.scoreMultiplier;
   if (!points) return;
   const game = room.game;
-  // Relay points are literal: an exact representative answer is 150 points
-  // (two 75-point rope steps), while each supporter adds exactly one point.
+  // Base relay points are 150 for a representative and one for a supporter;
+  // apply the room setting when awarded, without reweighting earlier answers.
   game.rawScores[team] += points / getMultipliers(room)[team];
   game.scores[team] += points;
 }
@@ -788,7 +791,7 @@ function awardTimeoutScore(room, player, score) {
   if (score <= 0) return;
   creditPlayer(player, score);
   addTeamScore(room, player.team, score, false);
-  send(player.ws, { type: 'timeoutScore', score });
+  send(player.ws, { type: 'timeoutScore', score, scoreMultiplier: room.scoreMultiplier });
 }
 
 function settleRelayDrafts(room, relay) {
@@ -800,11 +803,11 @@ function settleRelayDrafts(room, relay) {
     const representative = player.id === relay.blueId || player.id === relay.whiteId;
     const maxScore = representative ? ROPE_POINTS_PER_STEP * 2 : 1;
     const score = result.exact ? maxScore : result.score / 100 * maxScore;
-    relay.submissions[player.id] = { team: player.team, exact: result.exact, score };
+    relay.submissions[player.id] = { team: player.team, exact: result.exact, score: score * room.scoreMultiplier };
     if (score > 0) {
       creditPlayer(player, score);
       addRelayScore(room, player.team, score);
-      send(player.ws, { type: 'timeoutScore', score, relay: true, representative });
+      send(player.ws, { type: 'timeoutScore', score, scoreMultiplier: room.scoreMultiplier, relay: true, representative });
     }
   }
 }
@@ -900,6 +903,7 @@ function handleTypedAnswer(player, answer) {
   if (game.phase === 'placement') return handlePlacementAnswer(room, player, answer);
   if (game.phase !== 'round' || !player.progress || !getMode(room)) return;
   if (Date.now() >= game.roundEndsAt) return finishRound(room);
+  if (Date.now() < player.progress.promptStartedAt) return;
   const mode = getMode(room);
   if (!['word', 'repair'].includes(mode.id)) return;
 
@@ -913,20 +917,23 @@ function handleTypedAnswer(player, answer) {
   creditPlayer(player, result.score);
   addTeamScore(room, player.team, result.score);
   player.progress.promptIndex += 1;
-  player.progress.promptStartedAt = Date.now();
+  player.progress.promptStartedAt = Date.now() + (result.exact ? 0 : ANSWER_REVIEW_MS);
 
   send(player.ws, {
     type: 'answerResult',
     correct: result.exact,
     score: result.score,
+    scoreMultiplier: room.scoreMultiplier,
+    submittedAnswer: String(answer),
+    question: mode.id === 'word' ? source.word : source.question,
     accuracy: result.accuracy,
     cpm: result.cpm,
     word: mode.id === 'word' ? source.word : undefined,
     meaning: mode.id === 'word' ? source.meaning : undefined,
     example: mode.id === 'word' ? source.example : undefined,
     category: mode.id === 'word' ? source.category : undefined,
-    correctAnswer: mode.id === 'repair' ? source.answer : undefined,
-    explanation: mode.id === 'repair' ? source.explanation : undefined,
+    correctAnswer: expected,
+    explanation: mode.id === 'repair' ? source.explanation : source.meaning,
   });
   broadcast(room);
 }
@@ -937,6 +944,7 @@ function handleChoice(player, choice, promptId) {
   const game = room.game;
   if (game.phase !== 'round' || getMode(room)?.id !== 'quiz') return;
   if (Date.now() >= game.roundEndsAt) return finishRound(room);
+  if (Date.now() < player.progress.promptStartedAt) return;
   const { id, prompt } = currentRoomQuizPrompt(room, player);
   // Tablet clients identify the question so a double tap cannot answer the next one.
   if ((room.playMode === 'tablet' || room.customQuestions || promptId != null) && promptId !== id) return;
@@ -953,15 +961,18 @@ function handleChoice(player, choice, promptId) {
     subtractTeamScore(room, player.team, QUIZ_WRONG_PENALTY);
   }
   player.progress.promptIndex += 1;
-  player.progress.promptStartedAt = Date.now();
+  player.progress.promptStartedAt = Date.now() + (correct ? 0 : ANSWER_REVIEW_MS);
   send(player.ws, {
     type: 'choiceResult',
     correct,
     score,
+    scoreMultiplier: room.scoreMultiplier,
+    submittedAnswer: choice,
+    question: prompt.meaning,
     answer: prompt.answer,
     meaning: prompt.meaning,
     category: prompt.category,
-    explanation: prompt.explanation,
+    explanation: prompt.explanation || `${prompt.answer}: ${prompt.meaning}`,
   });
   broadcast(room);
 }
@@ -982,8 +993,9 @@ function handleRelayAnswer(player, answer, deadline) {
   const representative = Boolean(team);
   const score = exact ? representative ? ROPE_POINTS_PER_STEP * 2 : 1 : 0;
   player.roundDraft = null;
-  relay.submissions[player.id] = { team: player.team, exact, score };
-  send(player.ws, { type: 'relayAnswerResult', correct: exact, score, representative });
+  relay.submissions[player.id] = { team: player.team, exact, score: score * room.scoreMultiplier };
+  send(player.ws, { type: 'relayAnswerResult', correct: exact, score, scoreMultiplier: room.scoreMultiplier, representative,
+    submittedAnswer: String(answer), question: relay.prompt, answer: relay.prompt, explanation: '띄어쓰기와 글자를 확인하고 제시된 문장을 똑같이 입력해 주세요.' });
   if (score) {
     creditPlayer(player, score);
     addRelayScore(room, player.team, score);
@@ -1010,6 +1022,7 @@ function handleDraft(player, message) {
     return;
   }
   if (!['word', 'repair'].includes(mode)) return;
+  if (Date.now() < player.progress.promptStartedAt) return;
   const prompt = getPromptFor(room, player);
   if (message.promptId !== prompt?.id) return;
   player.roundDraft = { kind: mode, promptId: prompt.id, text };
@@ -1133,6 +1146,18 @@ function createRoomAndJoin(ws, message) {
   joinPlayer(ws, { ...message, name, roomId: room.id });
 }
 
+function updateScoreMultiplier(player, message) {
+  const room = getRoomForPlayer(player);
+  if (!room) return;
+  const fail = (text) => send(player.ws, { type: 'error', message: text });
+  if (!player.isHost) return fail('선생님(방장)만 점수 배율을 바꿀 수 있어요.');
+  if (!SCORE_SETTING_PHASES.includes(room.game.phase)) return fail('점수 배율은 경기 화면에서 바꿀 수 있어요.');
+  if (!SCORE_MULTIPLIER_LEVELS.includes(message.multiplier)) return fail('점수 배율은 1배부터 7배까지 선택해 주세요.');
+  if (room.scoreMultiplier === message.multiplier) return;
+  room.scoreMultiplier = message.multiplier;
+  broadcast(room);
+}
+
 function updateRoomQuestions(player, message) {
   const room = getRoomForPlayer(player);
   if (!room) return;
@@ -1152,7 +1177,7 @@ function updateRoomQuestions(player, message) {
     room.customModes = modes.map((mode, index) => mode.id === 'quiz' ? {
       ...mode,
       name: room.playMode === 'tablet' ? `선생님 퀴즈 ${index + 1}` : '선생님 객관식 퀴즈',
-      description: `선생님이 올린 ${questions.length}개 문제에서 출제해요. 정답은 속도 보너스, 오답은 30점 감점!`,
+      description: `선생님이 올린 ${questions.length}개 문제에서 출제해요. 정답은 속도 보너스, 기본 오답 감점은 30점이에요.`,
     } : mode);
   } else {
     room.customQuestions = null;
@@ -1180,6 +1205,7 @@ function handleMessage(ws, rawMessage) {
   if (!player) return;
 
   if (message.type === 'uploadQuestions' || message.type === 'clearQuestions') return updateRoomQuestions(player, message);
+  if (message.type === 'setScoreMultiplier') return updateScoreMultiplier(player, message);
   if (message.type === 'start') return startGame(player);
   if (message.type === 'restart') return resetToLobby(player);
   if (message.type === 'answer') return handleTypedAnswer(player, message.answer);

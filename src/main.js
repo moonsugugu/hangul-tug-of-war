@@ -3,6 +3,7 @@ import { mountTugScene } from './tugScene.js';
 import { startBgm, stopBgm, unlockSoundEffects, playVictorySound } from './bgm.js';
 import QRCode from 'qrcode';
 import { MAX_CSV_BYTES, MAX_CUSTOM_QUESTIONS, parseQuestionCsv } from '../shared/question-csv.js';
+import { SCORE_MULTIPLIER_LEVELS, SCORE_SETTING_PHASES, ANSWER_REVIEW_MS } from '../shared/score-settings.js';
 
 const app = document.querySelector('#app');
 const initialRoomId = normalizeRoomId(new URLSearchParams(window.location.search).get('room'));
@@ -23,6 +24,7 @@ const state = {
   uploadingQuestions: false,
   questionUploadStatus: '',
   questionUploadError: false,
+  wrongAnswer: null,
 };
 
 let socket;
@@ -33,6 +35,8 @@ let lastCelebrationKey = '';
 let isComposing = false;
 let pendingRender = null;
 let pendingDraftReset = false;
+let wrongAnswerTimer;
+let resultToastTimer;
 
 function renderWhenReady(kind) {
   if (isComposing) {
@@ -76,9 +80,9 @@ const modeLabels = {
 
 const roundGuides = {
   word: '화면에 나온 순우리말을 정확히 입력하세요. 정확하고 빠를수록 줄을 더 당깁니다.',
-  quiz: '네 가지 보기 중 정답을 고르세요. 오답이면 우리 팀 점수가 30점 깎이니 신중하게 골라 주세요!',
+  quiz: '네 가지 보기 중 정답을 고르세요. 기본 오답 감점은 30점이며 설정한 점수 배율을 곱해요. 오답 해설은 3초 동안 보여 줘요.',
   repair: '잘못 붙은 문장을 올바르게 띄어 써서 입력하세요.',
-  relay: '대표가 정답을 맞히면 줄이 2칸 움직여요. 친구들은 같은 문장을 입력해 1점씩 보태고, 제한시간까지 대표가 계속 바뀝니다.',
+  relay: '기본 대표 정답은 줄 2칸, 응원 정답은 1점이며 설정한 점수 배율을 곱해요. 제한시간까지 대표가 계속 바뀝니다.',
 };
 
 function winningTeamForCelebration(data) {
@@ -177,6 +181,7 @@ function connect() {
         message.counts?.blue,
         message.counts?.white,
         message.self?.team,
+        message.self?.isHost,
         message.players?.map((player) => `${player.id}:${player.connected}:${player.characterId}:${player.team}`).join(','),
       ].join('|');
       const promptKey = [
@@ -209,10 +214,13 @@ function connect() {
       return;
     }
     if (message.type === 'answerResult' || message.type === 'choiceResult') {
-      state.result = message.type === 'choiceResult' && !message.correct
-        ? { ...message, title: '오답! 우리 팀 점수 30점 감점' }
-        : message;
+      const result = { ...message, score: message.score * (message.scoreMultiplier || 1) };
       state.draft = '';
+      if (!message.correct) {
+        showWrongAnswer(result);
+        return;
+      }
+      state.result = result;
       renderResultToast();
       return;
     }
@@ -242,15 +250,18 @@ function connect() {
       return;
     }
     if (message.type === 'relayAnswerResult') {
-      state.result = { correct: message.correct, score: message.score, title: message.correct ? (message.representative ? '대표 정답! 줄 2칸 이동!' : '응원 점수 +1점!') : '아쉬워요, 다음 문장에서 다시 도전해요' };
+      const multiplier = message.scoreMultiplier || 1;
+      const result = { ...message, score: message.score * multiplier, title: message.representative ? `대표 정답! 줄 ${2 * multiplier}칸 이동!` : `응원 점수 +${multiplier}점!` };
       state.draft = '';
+      if (!message.correct) { showWrongAnswer(result); return; }
+      state.result = result;
       renderResultToast();
       return;
     }
     if (message.type === 'timeoutScore') {
       state.result = {
         correct: true,
-        score: message.score,
+        score: message.score * (message.scoreMultiplier || 1),
         title: message.relay
           ? message.representative ? '시간 종료! 대표가 쓴 만큼 줄을 당겨요' : '시간 종료! 응원 부분 점수'
           : '시간 종료! 입력한 만큼 부분 점수',
@@ -367,7 +378,7 @@ function restartGame() {
 
 function submitAnswer() {
   const prompt = state.data?.prompt;
-  if (!prompt || !['word', 'repair', 'placement', 'practice'].includes(prompt.kind)) return;
+  if (state.wrongAnswer || !prompt || !['word', 'repair', 'placement', 'practice'].includes(prompt.kind)) return;
   const answer = document.querySelector('#answer-input')?.value ?? state.draft;
   if (!answer.trim()) return;
   send({ type: 'answer', answer });
@@ -375,7 +386,7 @@ function submitAnswer() {
 
 function submitChoice(choice) {
   const prompt = state.data?.prompt;
-  if (!state.connected || prompt?.kind !== 'quiz' || state.pendingChoiceId === prompt.id) return;
+  if (!state.connected || state.wrongAnswer || prompt?.kind !== 'quiz' || state.pendingChoiceId === prompt.id) return;
   state.pendingChoiceId = prompt.id;
   document.querySelectorAll('[data-choice]').forEach((button) => { button.disabled = true; });
   send({ type: 'choice', choice, promptId: prompt.id });
@@ -437,7 +448,7 @@ function bindTeacherSettings(root) {
 
 function submitRelay() {
   const prompt = state.data?.prompt;
-  if (prompt?.kind !== 'relay' || prompt.submitted) return;
+  if (state.wrongAnswer || prompt?.kind !== 'relay' || prompt.submitted) return;
   const answer = document.querySelector('#answer-input')?.value ?? state.draft;
   if (!answer.trim()) return;
   send({ type: 'relayAnswer', answer, deadline: prompt.relayDeadline });
@@ -649,7 +660,7 @@ function renderLobby() {
       </article>
       <div class="how-to panel-card">
         <div><span class="how-icon">✦</span><strong>게임 규칙</strong></div>
-        <p>${data?.playMode === 'tablet' ? '<b>타자 테스트 없이 모든 라운드를 터치 객관식으로 진행해요.</b> 보기 4개 중 한 번만 선택하세요. 정답은 60점에 8초 이내 빠르기에 따라 최대 40점 보너스, 오답은 팀 점수 30점 감점이에요. 정답 점수에는 라운드·인원 보정이 적용돼요.' : '위 연습은 점수에 반영되지 않아요. 방장이 시작하면 <b>30초 동안 문장을 입력해 타자 실력을 재고</b>, 팀을 자동으로 나눈 뒤 1라운드를 시작해요. 인원이 적은 팀에는 인원수 비율만큼 보정 점수가 적용돼요.'}</p>
+        <p>${data?.playMode === 'tablet' ? '<b>타자 테스트 없이 모든 라운드를 터치 객관식으로 진행해요.</b> 보기 4개 중 한 번만 선택하세요. 기본 정답은 60점에 속도 보너스 최대 40점, 기본 오답 감점은 30점이에요. 선생님이 경기 중 설정한 배율을 곱하고, 정답에는 라운드·인원 보정도 적용돼요. 오답 해설은 3초 동안 보여 줘요.' : '위 연습은 점수에 반영되지 않아요. 방장이 시작하면 <b>30초 동안 문장을 입력해 타자 실력을 재고</b>, 팀을 자동으로 나눈 뒤 1라운드를 시작해요. 인원이 적은 팀에는 인원수 비율만큼 보정 점수가 적용돼요.'}</p>
       </div>
     </section>
   `;
@@ -678,7 +689,7 @@ function renderPlacementCard(data) {
 
 function renderPracticeCard(data) {
   if (data?.playMode === 'tablet') {
-    return `<section class="practice-card panel-card"><div class="section-kicker">TABLET QUIZ · 터치로만 경기</div><h2>보기 4개 중 정답을 터치해요</h2><p class="muted">빠른 정답은 보너스! 틀리면 우리 팀 점수가 30점 깎여요.</p><div class="round-strip">${(data.roundModes || []).map((mode, index) => `<span class="round-chip"><b>${index + 1}</b>${escapeHtml(mode.name)}</span>`).join('')}</div></section>`;
+    return `<section class="practice-card panel-card"><div class="section-kicker">TABLET QUIZ · 터치로만 경기</div><h2>보기 4개 중 정답을 터치해요</h2><p class="muted">빠른 정답은 보너스! 기본 오답 감점은 30점이며 경기 중 선생님이 설정한 배율을 곱해요.</p><div class="round-strip">${(data.roundModes || []).map((mode, index) => `<span class="round-chip"><b>${index + 1}</b>${escapeHtml(mode.name)}</span>`).join('')}</div></section>`;
   }
   const prompt = data?.prompt;
   if (!prompt?.word) {
@@ -753,9 +764,7 @@ function renderTeamReveal(data) {
 function renderScoreboard(data) {
   const mine = (team) => (data.self?.team === team ? ' is-mine' : '');
   const mineTag = (team) => (data.self?.team === team ? '<span class="mine-tag">우리 팀</span>' : '');
-  const scoringRule = (team) => data.mode?.id === 'relay'
-    ? '대표 정답 2칸 · 응원 정답 1점'
-    : `인원 보정 ×${data.multipliers[team].toFixed(2)}`;
+  const scoringRule = (team) => getScoringRule(data, team);
   return `
     <div class="scoreboard">
       <div class="score-card score-card--blue${mine('blue')}">
@@ -771,6 +780,25 @@ function renderScoreboard(data) {
       </div>
     </div>
   `;
+}
+
+function getScoringRule(data, team) {
+  const multiplier = data.scoreMultiplier || 1;
+  return data.mode?.id === 'relay'
+    ? `대표 정답 ${2 * multiplier}칸 · 응원 정답 ${multiplier}점`
+    : `점수 배율 ×${multiplier} · 인원 보정 ×${Number(data.multipliers?.[team] || 1).toFixed(2)}`;
+}
+
+function renderScoreSettings(data) {
+  const multiplier = data.scoreMultiplier || 1;
+  if (!data.self?.isHost || !SCORE_SETTING_PHASES.includes(data.phase)) {
+    return `<div class="score-setting-summary">현재 점수 배율 <strong id="score-setting-value">×${multiplier}</strong></div>`;
+  }
+  return `<section class="score-settings panel-card" aria-label="선생님 점수 배율 설정">
+    <div class="score-settings-heading"><h2>선생님 점수 배율</h2><strong id="score-setting-value" role="status">현재 ${multiplier}배</strong></div>
+    <div class="score-levels" role="group" aria-label="점수 배율 7단계">${SCORE_MULTIPLIER_LEVELS.map((level) => `<button type="button" class="score-level" data-score-multiplier="${level}" aria-label="${level}배" aria-pressed="${level === multiplier}">×${level}</button>`).join('')}</div>
+    <p>양 팀의 다음 득점·감점부터 적용해요. 이미 얻은 점수는 유지돼요.</p>
+  </section>`;
 }
 
 function renderArena(data) {
@@ -795,7 +823,7 @@ function renderArena(data) {
           </div>
           <span class="scene-team-tag scene-team-tag--white" aria-hidden="true">백팀 · ${data.counts.white}명</span>
         </div>
-        ${data.phase === 'roundIntro' ? `<div class="round-intro-overlay" role="status"><span>${data.roundNumber === 5 ? '결승' : `${data.roundNumber}라운드`} 시작 안내</span><h2>${escapeHtml(data.mode?.name || '')}</h2><p>${escapeHtml(data.playMode === 'tablet' ? `${data.mode?.description || ''} 정답 60점 + 속도 보너스 최대 40점, 오답 −30점!` : roundGuides[data.mode?.id] || data.mode?.description || '')}</p><strong><span class="intro-time">${getTimeLabel(data.roundIntroRemainingMs)}</span> 뒤 시작!</strong></div>` : ''}
+        ${data.phase === 'roundIntro' ? `<div class="round-intro-overlay" role="status"><span>${data.roundNumber === 5 ? '결승' : `${data.roundNumber}라운드`} 시작 안내</span><h2>${escapeHtml(data.mode?.name || '')}</h2><p>${escapeHtml(data.playMode === 'tablet' ? `${data.mode?.description || ''} 기본 정답 60점 + 속도 보너스 최대 40점, 기본 오답 −30점에 설정한 배율을 곱해요!` : roundGuides[data.mode?.id] || data.mode?.description || '')}</p><strong><span class="intro-time">${getTimeLabel(data.roundIntroRemainingMs)}</span> 뒤 시작!</strong></div>` : ''}
         ${victoryTeam ? `<div class="victory-celebration victory-celebration--${victoryTeam}" role="status">${fireworks}<strong>${teamName(victoryTeam)} 승리! 🎉</strong></div>` : ''}
         <div class="scene-step-track" aria-hidden="true"><b>청</b>${Array.from({ length: maxSteps * 2 + 1 }, (_, index) => `<i class="rope-step ${index === maxSteps ? 'is-center' : ''} ${index === maxSteps + ropeStep ? 'is-current' : ''}" data-rope-tick="${index}"></i>`).join('')}<b>백</b></div>
         <div class="scene-position-label" aria-live="polite">${getRopeStepLabel(data)}</div>
@@ -842,7 +870,7 @@ async function toggleBgm() {
 
 function renderPrompt(data) {
   if (data.phase === 'roundIntro') {
-    return `<section class="prompt-card round-intro-card"><span class="round-badge">${data.roundNumber === 5 ? 'FINAL ROUND' : `ROUND ${data.roundNumber}`}</span><h2>${escapeHtml(data.mode?.name || '')}</h2><p>${escapeHtml(data.playMode === 'tablet' ? `${data.mode?.description || ''} 정답 60점 + 속도 보너스 최대 40점, 오답 −30점!` : roundGuides[data.mode?.id] || data.mode?.description || '')}</p><div class="next-countdown"><span class="intro-time">${getTimeLabel(data.roundIntroRemainingMs)}</span> 뒤 시작해요!</div></section>`;
+    return `<section class="prompt-card round-intro-card"><span class="round-badge">${data.roundNumber === 5 ? 'FINAL ROUND' : `ROUND ${data.roundNumber}`}</span><h2>${escapeHtml(data.mode?.name || '')}</h2><p>${escapeHtml(data.playMode === 'tablet' ? `${data.mode?.description || ''} 기본 정답 60점 + 속도 보너스 최대 40점, 기본 오답 −30점에 설정한 배율을 곱해요!` : roundGuides[data.mode?.id] || data.mode?.description || '')}</p><div class="next-countdown"><span class="intro-time">${getTimeLabel(data.roundIntroRemainingMs)}</span> 뒤 시작해요!</div></section>`;
   }
   if (data.phase === 'wheel') {
     const selected = Number(data.wheelSelectedIndex ?? 0);
@@ -879,7 +907,7 @@ function renderPrompt(data) {
         ${prompt.source !== 'custom' && prompt.category !== '순우리말' ? '<div class="history-ribbon">한글과 세종대왕 배움 카드</div>' : ''}
         <div class="meaning-question">${escapeHtml(prompt.meaning)}</div>
         <div class="choice-grid">${prompt.choices.map((choice, index) => `<button class="choice-button" data-choice="${escapeHtml(choice)}"><span>${String.fromCharCode(9312 + index)}</span>${escapeHtml(choice)}</button>`).join('')}</div>
-        <p class="prompt-note">정답 60점 + 속도 보너스 최대 40점 · 오답 −30점<br />8초 안에 빠르게 맞힐수록 보너스가 커져요. 정답 점수에 라운드·인원 보정이 적용돼요.</p>
+        <p class="prompt-note">기본 정답 60점 + 속도 보너스 최대 40점 · 기본 오답 −30점<br />기본 점수·감점에 선생님이 설정한 배율을 곱해요. 8초 안에 빠르게 맞힐수록 보너스가 커지고, 정답 점수에 라운드·인원 보정이 적용돼요.</p>
       </section>
     `;
   }
@@ -900,10 +928,10 @@ function renderPrompt(data) {
     const representativeName = (id) => (data.players || []).find((player) => player.id === id)?.name || '선정 중';
     return `
       <section class="prompt-card prompt-card--relay">
-        <div class="prompt-meta"><span class="round-badge">ROUND ${data.roundNumber}${data.roundNumber === 5 ? ' FINAL' : ''}</span><span class="prompt-help">${selected ? '당신이 이번 팀 대표예요! 정답이면 줄 2칸 이동' : '대표를 응원하며 같은 문장을 입력하면 1점'}</span></div>
+        <div class="prompt-meta"><span class="round-badge">ROUND ${data.roundNumber}${data.roundNumber === 5 ? ' FINAL' : ''}</span><span class="prompt-help">${selected ? '당신이 이번 팀 대표예요! 기본 정답은 줄 2칸 이동' : '대표를 응원하며 같은 문장을 입력하면 기본 1점'}</span></div>
         <div class="relay-versus"><span>청팀 대표 <strong>${escapeHtml(representativeName(data.relay?.blueId))}</strong></span><b>VS</b><span>백팀 대표 <strong>${escapeHtml(representativeName(data.relay?.whiteId))}</strong></span></div>
         <div class="relay-sentence">${escapeHtml(prompt.prompt)}</div>
-        <p class="relay-scoring-note">대표 정답: 줄 2칸 이동 · 응원 정답: 1점 · 제한시간까지 대표가 계속 바뀌어요</p>
+        <p class="relay-scoring-note">기본 대표 정답: 줄 2칸 이동 · 기본 응원 정답: 1점 · 설정한 점수 배율을 곱해요. 제한시간까지 대표가 계속 바뀌어요.</p>
         ${prompt.submitted ? '<div class="spectator-message">입력 완료! 다음 문장을 기다려 주세요.</div>' : `<form id="answer-form" class="answer-form"><input id="answer-input" class="answer-input" autocomplete="off" spellcheck="false" placeholder="문장을 똑같이 입력해 주세요" /><button class="submit-button">${selected ? '대표 출전' : '응원 보태기'} <span>↗</span></button></form>`}
       </section>
     `;
@@ -920,6 +948,7 @@ function renderGame() {
     <section class="game-page">
       <div class="game-heading"><div><div class="section-kicker">HANGUL DAY MATCH · ${data.roundNumber === 5 ? '결승 5라운드' : `${Math.max(1, data.roundNumber)}라운드`}</div><h1>${escapeHtml(data.mode?.name || '말모이 줄다리기')}</h1><p>${escapeHtml(data.mode?.description || '한글의 힘으로 줄을 당겨요.')}</p></div>${data.self ? `<div class="my-team-chip my-team-chip--${data.self.team}"><span>${data.self.team === 'blue' ? '청' : '백'}</span><div><small>${escapeHtml(data.self.name)}</small><strong>나는 ${teamName(data.self.team)}</strong></div></div>` : '<div class="live-pill"><i></i> LIVE SERVER</div>'}</div>
       ${renderScoreboard(data)}
+      ${renderScoreSettings(data)}
       ${renderArena(data)}
       <div id="prompt-root">${renderPrompt(data)}</div>
       <div class="round-strip">${(data.roundModes || roundModes).map((mode, index) => `<span class="round-chip ${index === data.roundIndex ? 'is-active' : index < data.roundIndex ? 'is-done' : ''}"><b>${index + 1}</b>${escapeHtml(mode.name || modeLabels[mode.id])}${data.roundScores?.[index] ? ` · ${teamName(data.roundScores[index].winner)} 승` : ''}</span>`).join('')}<span class="round-chip round-chip--final ${finalRoundActive ? 'is-active' : ''} ${finalRoundPending ? 'is-optional' : ''}" title="1~4라운드가 2:2로 끝나면 열립니다"><b>5</b>돌림판 결승${finalRoundPending ? ' · 2:2일 때' : ''}</span></div>
@@ -942,7 +971,7 @@ function render() {
     : data.phase === 'placement' ? renderPlacement(data)
       : data.phase === 'teamReveal' ? renderTeamReveal(data)
         : renderGame();
-  app.innerHTML = `${renderHeader()}<main>${page}</main><div id="notice-root"></div><div id="toast-root"></div>`;
+  app.innerHTML = `${renderHeader()}<main>${page}</main><div id="notice-root"></div><div id="toast-root"></div><div id="wrong-answer-root"></div>`;
   const input = document.querySelector('#answer-input');
   if (input) input.value = state.draft;
   bindEvents();
@@ -961,9 +990,16 @@ function render() {
   }
   if (state.notice) renderNotice();
   if (state.result) renderResultToast();
+  renderWrongAnswer();
 }
 
 function bindEvents() {
+  document.querySelectorAll('[data-score-multiplier]').forEach((button) => {
+    button.addEventListener('click', () => {
+      if (!state.connected || !state.data?.self?.isHost) return;
+      send({ type: 'setScoreMultiplier', multiplier: Number(button.dataset.scoreMultiplier) });
+    });
+  });
   const settingsRoot = document.querySelector('#teacher-settings-root');
   if (settingsRoot) bindTeacherSettings(settingsRoot);
   document.querySelectorAll('input[name="play-mode"]').forEach((input) => {
@@ -1042,6 +1078,11 @@ function bindPromptEvents(root) {
 function updateDynamic() {
   const data = state.data;
   if (!data) return;
+  const settingValue = document.querySelector('#score-setting-value');
+  if (settingValue) settingValue.textContent = data.self?.isHost && SCORE_SETTING_PHASES.includes(data.phase) ? `현재 ${data.scoreMultiplier || 1}배` : `×${data.scoreMultiplier || 1}`;
+  document.querySelectorAll('[data-score-multiplier]').forEach((button) => {
+    button.setAttribute('aria-pressed', String(Number(button.dataset.scoreMultiplier) === (data.scoreMultiplier || 1)));
+  });
   const time = document.querySelector('#arena-time');
   if (time) time.textContent = data.phase === 'round' ? getTimeLabel(data.timeRemainingMs) : data.phase === 'roundIntro' ? getTimeLabel(data.roundIntroRemainingMs) : data.phase === 'intermission' ? getTimeLabel(data.intermissionRemainingMs) : data.phase === 'wheel' ? getTimeLabel(data.wheelRemainingMs) : '완료';
   document.querySelectorAll('.intro-time').forEach((introTime) => { introTime.textContent = getTimeLabel(data.roundIntroRemainingMs); });
@@ -1060,9 +1101,7 @@ function updateDynamic() {
   if (whiteScore) whiteScore.textContent = formatScore(data.scores?.white);
   if (blueCount) blueCount.textContent = `${data.counts?.blue || 0}명`;
   if (whiteCount) whiteCount.textContent = `${data.counts?.white || 0}명`;
-  const scoringRule = (team) => data.mode?.id === 'relay'
-    ? '대표 정답 2칸 · 응원 정답 1점'
-    : `인원 보정 ×${Number(data.multipliers?.[team] || 1).toFixed(2)}`;
+  const scoringRule = (team) => getScoringRule(data, team);
   if (blueMultiplier) blueMultiplier.textContent = scoringRule('blue');
   if (whiteMultiplier) whiteMultiplier.textContent = scoringRule('white');
   if (blueWins) blueWins.textContent = `라운드 ${data.roundWins?.blue || 0}승`;
@@ -1085,6 +1124,37 @@ function updateDynamic() {
   if (input && document.activeElement !== input && state.draft) input.value = state.draft;
 }
 
+function showWrongAnswer(result) {
+  window.clearTimeout(wrongAnswerTimer);
+  window.clearTimeout(resultToastTimer);
+  state.result = null;
+  const toast = document.querySelector('#toast-root');
+  if (toast) toast.innerHTML = '';
+  state.wrongAnswer = result;
+  renderWrongAnswer();
+  wrongAnswerTimer = window.setTimeout(() => {
+    state.wrongAnswer = null;
+    renderWrongAnswer();
+    document.querySelector('#answer-input')?.focus();
+  }, ANSWER_REVIEW_MS);
+}
+
+function renderWrongAnswer() {
+  const root = document.querySelector('#wrong-answer-root');
+  if (!root) return;
+  const result = state.wrongAnswer;
+  const main = app.querySelector('main');
+  if (main) main.inert = Boolean(result);
+  if (!result) { root.innerHTML = ''; return; }
+  root.innerHTML = `<div class="wrong-answer-backdrop"><section class="wrong-answer-popup" role="alertdialog" aria-modal="true" aria-labelledby="wrong-answer-title" aria-describedby="wrong-answer-details" tabindex="-1">
+    <div class="wrong-answer-heading"><h2 id="wrong-answer-title">오답을 함께 확인해요</h2><strong>${result.score < 0 ? '−' : '+'}${formatScore(Math.abs(result.score))}점</strong></div>
+    <p class="wrong-answer-question">${escapeHtml(result.question || result.meaning || '')}</p>
+    <div id="wrong-answer-details"><p class="wrong-answer-selected"><b>내가 낸 답</b><span>${escapeHtml(result.submittedAnswer || '')}</span></p><p class="wrong-answer-correct"><b>정답</b><span>${escapeHtml(result.answer || result.correctAnswer || result.word || '')}</span></p><div class="wrong-answer-explanation"><b>문제 해설</b><p>${escapeHtml(result.explanation || result.meaning || '정답을 확인하고 다음 문제에 도전해 보세요.')}</p>${result.example ? `<p>예문: ${escapeHtml(result.example)}</p>` : ''}</div></div>
+    <p class="wrong-answer-countdown">3초 후 자동으로 닫혀요.</p>
+  </section></div>`;
+  root.querySelector('.wrong-answer-popup')?.focus();
+}
+
 function renderNotice() {
   const root = document.querySelector('#notice-root');
   if (!root) return;
@@ -1099,7 +1169,8 @@ function renderResultToast() {
   const detailParts = [result.meaning, result.example ? `예문: ${result.example}` : '', result.explanation, result.answer ? `정답: ${result.answer}` : ''].filter(Boolean);
   const details = detailParts.length ? `<small>${detailParts.map((detail) => escapeHtml(detail)).join('<br />')}</small>` : '';
   root.innerHTML = `<div class="result-toast ${result.correct ? 'is-correct' : 'is-wrong'}"><span class="toast-mark">${result.correct ? '✓' : '!'}</span><div><strong>${title}</strong>${details}</div><b>${result.unit === '타' ? '+' : ''}${Math.round(result.score || 0)}${result.unit || '점'}</b></div>`;
-  window.setTimeout(() => {
+  window.clearTimeout(resultToastTimer);
+  resultToastTimer = window.setTimeout(() => {
     if (root) root.innerHTML = '';
     state.result = null;
   }, 2_200);
