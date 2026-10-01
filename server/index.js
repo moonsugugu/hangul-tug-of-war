@@ -1,4 +1,5 @@
 import { WORD_PROMPTS, WORD_QUIZ_PROMPTS, HANGUL_CREATION_QUIZ_PROMPTS } from './quiz-prompts.js';
+import { MAX_CSV_BYTES, validateCustomQuestions } from '../shared/question-csv.js';
 import { createServer } from 'node:http';
 import { existsSync } from 'node:fs';
 import { readFile, stat } from 'node:fs/promises';
@@ -225,12 +226,14 @@ const TABLET_QUIZ_POOLS = {
 };
 
 function getModes(room) {
+  if (room.customModes) return room.customModes;
   return room.playMode === 'tablet' ? TABLET_MODES : MODES;
 }
 
 function currentRoomQuizPrompt(room, player) {
-  const { id, prompt } = currentQuizPrompt(player.progress, TABLET_QUIZ_POOLS[getMode(room)?.pool]);
-  return { id: room.playMode === 'tablet' ? `round-${room.game.roundIndex}-${id}` : id, prompt };
+  const pool = room.customQuestions?.questions || TABLET_QUIZ_POOLS[getMode(room)?.pool];
+  const { id, prompt } = currentQuizPrompt(player.progress, pool);
+  return { id: room.customQuestions ? `set-${room.questionRevision}-round-${room.game.roundIndex}-${id}` : room.playMode === 'tablet' ? `round-${room.game.roundIndex}-${id}` : id, prompt };
 }
 
 const MIME_TYPES = {
@@ -238,6 +241,7 @@ const MIME_TYPES = {
   '.js': 'text/javascript; charset=utf-8',
   '.css': 'text/css; charset=utf-8',
   '.json': 'application/json; charset=utf-8',
+  '.csv': 'text/csv; charset=utf-8',
   '.svg': 'image/svg+xml',
   '.ico': 'image/x-icon',
 };
@@ -282,6 +286,9 @@ function createRoom(playMode = 'typing') {
   const room = {
     id: createRoomId(),
     playMode,
+    customQuestions: null,
+    customModes: null,
+    questionRevision: 0,
     game: createGame(),
     players: new Map(),
     createdAt: Date.now(),
@@ -406,7 +413,7 @@ function getPromptFor(room, player) {
 
   if (mode.id === 'quiz') {
     const { id, prompt } = currentRoomQuizPrompt(room, player);
-    return { kind: 'quiz', id, category: prompt.category, meaning: prompt.meaning, choices: prompt.choices };
+    return { kind: 'quiz', id, source: room.customQuestions ? 'custom' : 'default', category: prompt.category, meaning: prompt.meaning, choices: prompt.choices };
   }
 
   if (mode.id === 'repair') {
@@ -445,6 +452,7 @@ function publicStateFor(room, player) {
     roomId: room.id,
     playMode: room.playMode,
     roundModes: getModes(room),
+    questionSet: { fileName: room.customQuestions?.fileName || '', count: room.customQuestions?.questions.length || 0, revision: room.questionRevision },
     roomUrl: getRoomUrl(room.id),
     maxPlayers: MAX_PLAYERS_PER_ROOM,
     phase: game.phase,
@@ -931,7 +939,7 @@ function handleChoice(player, choice, promptId) {
   if (Date.now() >= game.roundEndsAt) return finishRound(room);
   const { id, prompt } = currentRoomQuizPrompt(room, player);
   // Tablet clients identify the question so a double tap cannot answer the next one.
-  if (room.playMode === 'tablet' && promptId !== id) return;
+  if ((room.playMode === 'tablet' || room.customQuestions || promptId != null) && promptId !== id) return;
   if (!prompt.choices.includes(choice)) return;
   const elapsedMs = Date.now() - player.progress.promptStartedAt;
   const correct = choice === prompt.answer;
@@ -1125,6 +1133,36 @@ function createRoomAndJoin(ws, message) {
   joinPlayer(ws, { ...message, name, roomId: room.id });
 }
 
+function updateRoomQuestions(player, message) {
+  const room = getRoomForPlayer(player);
+  if (!room) return;
+  const fail = (text) => send(player.ws, { type: 'questionsUpdateResult', ok: false, message: text });
+  if (!player.isHost) return fail('선생님(방장)만 문제를 바꿀 수 있어요.');
+  if (room.game.phase !== 'lobby') return fail('문제는 게임을 시작하기 전 대기실에서만 바꿀 수 있어요.');
+  let questions;
+  if (message.type === 'uploadQuestions') {
+    try { questions = validateCustomQuestions(message.questions); }
+    catch (error) { return fail(error.message); }
+  }
+  room.questionRevision += 1;
+  if (questions) {
+    const fileName = typeof message.fileName === 'string' ? message.fileName.replace(/[\\/\x00-\x1f]/g, '').slice(0, 100) : '선생님 문제.csv';
+    room.customQuestions = { fileName: fileName || '선생님 문제.csv', questions };
+    const modes = room.playMode === 'tablet' ? TABLET_MODES : MODES;
+    room.customModes = modes.map((mode, index) => mode.id === 'quiz' ? {
+      ...mode,
+      name: room.playMode === 'tablet' ? `선생님 퀴즈 ${index + 1}` : '선생님 객관식 퀴즈',
+      description: `선생님이 올린 ${questions.length}개 문제에서 출제해요. 정답은 속도 보너스, 오답은 30점 감점!`,
+    } : mode);
+  } else {
+    room.customQuestions = null;
+    room.customModes = null;
+  }
+  resetPlayerProgress(room);
+  send(player.ws, { type: 'questionsUpdateResult', ok: true, message: questions ? `${questions.length}개 문제를 이 방에 적용했어요.` : '기본 문제로 돌아왔어요.' });
+  broadcast(room);
+}
+
 function handleMessage(ws, rawMessage) {
   let message;
   try {
@@ -1134,11 +1172,14 @@ function handleMessage(ws, rawMessage) {
     return;
   }
 
+  if (!message || typeof message !== 'object' || Array.isArray(message)) return;
+
   if (message.type === 'createRoom') return createRoomAndJoin(ws, message);
   if (message.type === 'join') return joinPlayer(ws, message);
   const player = getPlayerBySocket(ws);
   if (!player) return;
 
+  if (message.type === 'uploadQuestions' || message.type === 'clearQuestions') return updateRoomQuestions(player, message);
   if (message.type === 'start') return startGame(player);
   if (message.type === 'restart') return resetToLobby(player);
   if (message.type === 'answer') return handleTypedAnswer(player, message.answer);
@@ -1221,9 +1262,11 @@ const httpServer = createServer((req, res) => {
 const websocketServer = new WebSocketServer({
   server: httpServer,
   path: '/ws',
+  maxPayload: MAX_CSV_BYTES + 8_192,
   perMessageDeflate: process.env.WS_COMPRESS === '0' ? false : { zlibDeflateOptions: { level: 3 }, threshold: 1024 },
 });
 websocketServer.on('connection', (ws) => {
+  ws.on('error', () => ws.close());
   ws.on('message', (message) => handleMessage(ws, message));
   ws.on('close', () => {
     const room = getRoomBySocket(ws);

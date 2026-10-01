@@ -2,6 +2,7 @@ import './styles.css';
 import { mountTugScene } from './tugScene.js';
 import { startBgm, stopBgm, unlockSoundEffects, playVictorySound } from './bgm.js';
 import QRCode from 'qrcode';
+import { MAX_CSV_BYTES, MAX_CUSTOM_QUESTIONS, parseQuestionCsv } from '../shared/question-csv.js';
 
 const app = document.querySelector('#app');
 const initialRoomId = normalizeRoomId(new URLSearchParams(window.location.search).get('room'));
@@ -19,6 +20,9 @@ const state = {
   selectedCharacter: 'bear',
   selectedPlayMode: 'typing',
   pendingChoiceId: null,
+  uploadingQuestions: false,
+  questionUploadStatus: '',
+  questionUploadError: false,
 };
 
 let socket;
@@ -132,6 +136,7 @@ function connect() {
   socket.addEventListener('close', () => {
     state.connected = false;
     state.joined = false;
+    state.uploadingQuestions = false;
     render();
     setTimeout(connect, 1500);
   });
@@ -168,6 +173,7 @@ function connect() {
         message.phase,
         message.mode?.id,
         message.roundIndex,
+        message.questionSet?.revision,
         message.counts?.blue,
         message.counts?.white,
         message.self?.team,
@@ -193,6 +199,13 @@ function connect() {
         lastPromptKey = promptKey;
         renderWhenReady('prompt');
       }
+      return;
+    }
+    if (message.type === 'questionsUpdateResult') {
+      state.uploadingQuestions = false;
+      state.questionUploadStatus = message.message;
+      state.questionUploadError = !message.ok;
+      refreshTeacherSettings();
       return;
     }
     if (message.type === 'answerResult' || message.type === 'choiceResult') {
@@ -368,6 +381,60 @@ function submitChoice(choice) {
   send({ type: 'choice', choice, promptId: prompt.id });
 }
 
+async function uploadCsvQuestions(file) {
+  if (!file || state.uploadingQuestions) return;
+  state.uploadingQuestions = true;
+  state.questionUploadStatus = 'CSV 파일을 확인하고 있어요…';
+  state.questionUploadError = false;
+  refreshTeacherSettings();
+  try {
+    if (!/\.csv$/i.test(file.name)) throw new Error('CSV 파일을 선택해 주세요.');
+    if (file.size > MAX_CSV_BYTES) throw new Error('CSV 파일은 256KB 이내로 올려 주세요.');
+    const bytes = await file.arrayBuffer();
+    let text;
+    try { text = new TextDecoder('utf-8', { fatal: true }).decode(bytes); }
+    catch {
+      try { text = new TextDecoder('euc-kr', { fatal: true }).decode(bytes); }
+      catch { throw new Error('파일의 글자를 읽을 수 없어요. CSV UTF-8로 저장해서 다시 올려 주세요.'); }
+    }
+    const questions = parseQuestionCsv(text);
+    if (!state.connected || socket?.readyState !== WebSocket.OPEN) throw new Error('서버 연결을 확인한 뒤 다시 올려 주세요.');
+    if (!state.data?.self?.isHost || state.data.phase !== 'lobby') throw new Error('선생님(방장)이 대기실에서 올려 주세요.');
+    state.questionUploadStatus = `${questions.length}개 문제를 적용하고 있어요…`;
+    refreshTeacherSettings();
+    send({ type: 'uploadQuestions', fileName: file.name, questions });
+  } catch (error) {
+    state.uploadingQuestions = false;
+    state.questionUploadError = true;
+    state.questionUploadStatus = error.message;
+    refreshTeacherSettings();
+  }
+}
+
+function clearCsvQuestions() {
+  if (state.uploadingQuestions) return;
+  state.uploadingQuestions = true;
+  state.questionUploadError = false;
+  state.questionUploadStatus = '기본 문제로 변경하고 있어요…';
+  refreshTeacherSettings();
+  send({ type: 'clearQuestions' });
+}
+
+function refreshTeacherSettings() {
+  const root = document.querySelector('#teacher-settings-root');
+  if (!root) return;
+  root.innerHTML = renderTeacherSettings(state.data);
+  bindTeacherSettings(root);
+  const startButton = document.querySelector('#start-button');
+  if (startButton) startButton.disabled = state.uploadingQuestions;
+}
+
+function bindTeacherSettings(root) {
+  root.querySelector('#upload-csv-button')?.addEventListener('click', () => root.querySelector('#question-csv-file')?.click());
+  root.querySelector('#question-csv-file')?.addEventListener('change', (event) => uploadCsvQuestions(event.target.files?.[0]));
+  root.querySelector('#clear-csv-button')?.addEventListener('click', clearCsvQuestions);
+}
+
 function submitRelay() {
   const prompt = state.data?.prompt;
   if (prompt?.kind !== 'relay' || prompt.submitted) return;
@@ -502,6 +569,28 @@ function renderRoomShare() {
   `;
 }
 
+function renderTeacherSettings(data) {
+  if (!data?.self?.isHost || data.phase !== 'lobby') return '';
+  const uploaded = data.questionSet?.count > 0;
+  return `<details class="teacher-settings panel-card" open>
+    <summary>⚙ 선생님 설정</summary>
+    <div class="teacher-settings-content">
+      <h2>우리 반 객관식 문제</h2>
+      <p>CSV 파일로 문제를 넣어요. ${data.playMode === 'tablet' ? '모든 라운드에서 업로드한 문제만 출제해요.' : '객관식 라운드에서 업로드한 문제만 출제해요.'}</p>
+      <div class="question-set-status">${uploaded ? `<strong>선생님 문제 ${data.questionSet.count}개 적용 중</strong><span>${escapeHtml(data.questionSet.fileName)}</span>` : '<strong>기본 문제 사용 중</strong><span>파일을 올리면 기본 객관식 문제를 대신해요.</span>'}</div>
+      <div class="teacher-settings-actions">
+        <button type="button" id="upload-csv-button" class="secondary-button" ${state.uploadingQuestions ? 'disabled' : ''}>CSV 문제 업로드</button>
+        <a class="secondary-button" href="/templates/malmoe-quiz-example.csv" download="말모이-객관식-예시양식.csv">예시 양식 다운로드</a>
+        ${uploaded ? `<button type="button" id="clear-csv-button" class="secondary-button" ${state.uploadingQuestions ? 'disabled' : ''}>기본 문제로 되돌리기</button>` : ''}
+      </div>
+      <input id="question-csv-file" type="file" accept=".csv,text/csv" hidden />
+      <p class="csv-format-help">열 이름: 문제, 보기1, 보기2, 보기3, 보기4, 정답, 해설, 분류<br />정답은 1~4 번호 또는 보기 문구로 적어요. 해설·분류는 비워도 돼요.<br />최대 ${MAX_CUSTOM_QUESTIONS}문제 · 256KB · Excel에서 CSV UTF-8로 저장해 주세요.</p>
+      <p class="csv-retention-note">이 방에서만 사용하며 새 게임에도 유지돼요. 방이 사라지면 문제도 사라지니 원본 CSV를 보관해 주세요.</p>
+      ${state.questionUploadStatus ? `<p class="csv-upload-message ${state.questionUploadError ? 'is-error' : ''}" role="${state.questionUploadError ? 'alert' : 'status'}">${escapeHtml(state.questionUploadStatus)}</p>` : ''}
+    </div>
+  </details>`;
+}
+
 function renderLobby() {
   const data = state.data;
   if (!state.connected) {
@@ -545,8 +634,9 @@ function renderLobby() {
           <h1>모두 모이면 시작해요</h1>
           <p class="muted">현재 ${players.length}/${data?.maxPlayers || 30}명 · ${data?.playMode === 'tablet' ? '태블릿 객관식 모드 · 터치로만 경기하고 팀은 무작위로 나눠요.' : '기존 타자 모드 · 자유 연습 뒤 타자 실력을 재서 팀을 나눠요.'}</p>
         </div>
-        ${isHost ? '<button id="start-button" class="primary-button compact">게임 시작 <span>→</span></button>' : '<span class="waiting-pill"><i></i> 진행자를 기다리는 중</span>'}
+        ${isHost ? `<button id="start-button" class="primary-button compact" ${state.uploadingQuestions ? 'disabled' : ''}>게임 시작 <span>→</span></button>` : '<span class="waiting-pill"><i></i> 진행자를 기다리는 중</span>'}
       </div>
+      <div id="teacher-settings-root">${renderTeacherSettings(data)}</div>
       ${renderRoomShare()}
       <div id="practice-root">${renderPracticeCard(data)}</div>
       <article class="team-lobby-card lobby-roster">
@@ -756,7 +846,7 @@ function renderPrompt(data) {
   }
   if (data.phase === 'wheel') {
     const selected = Number(data.wheelSelectedIndex ?? 0);
-    return `<section class="prompt-card wheel-card" style="--wheel-turns:${1440 - selected * 90}deg;--wheel-duration:${Math.round(Number(data.wheelDurationMs || 7000) * .65)}ms"><span class="round-badge">FINAL ROUND</span><h2>2:2 동점! 결승 종목 돌림판</h2><p>1~4라운드 중 하나를 다시 겨뤄 최종 승자를 정해요.</p><div class="wheel-wrap"><div class="wheel-pointer" aria-hidden="true"></div><div class="game-wheel">${data.playMode === 'tablet' ? '<span>순우리말</span><span>창제 원리</span><span>세종대왕</span><span>종합 퀴즈</span>' : '<span>말모이</span><span>뜻풀이</span><span>바른말</span><span>릴레이</span>'}</div></div><p class="wheel-countdown">결승까지 <span id="wheel-time">${getTimeLabel(data.wheelRemainingMs)}</span></p><p class="wheel-result">선정 종목: <strong>${escapeHtml(data.roundModes?.[selected]?.name || modeLabels[roundModes[selected]?.id] || '')}</strong></p></section>`;
+    return `<section class="prompt-card wheel-card" style="--wheel-turns:${1440 - selected * 90}deg;--wheel-duration:${Math.round(Number(data.wheelDurationMs || 7000) * .65)}ms"><span class="round-badge">FINAL ROUND</span><h2>2:2 동점! 결승 종목 돌림판</h2><p>1~4라운드 중 하나를 다시 겨뤄 최종 승자를 정해요.</p><div class="wheel-wrap"><div class="wheel-pointer" aria-hidden="true"></div><div class="game-wheel">${data.questionSet?.count && data.playMode === 'tablet' ? '<span>퀴즈 1</span><span>퀴즈 2</span><span>퀴즈 3</span><span>퀴즈 4</span>' : data.playMode === 'tablet' ? '<span>순우리말</span><span>창제 원리</span><span>세종대왕</span><span>종합 퀴즈</span>' : '<span>말모이</span><span>뜻풀이</span><span>바른말</span><span>릴레이</span>'}</div></div><p class="wheel-countdown">결승까지 <span id="wheel-time">${getTimeLabel(data.wheelRemainingMs)}</span></p><p class="wheel-result">선정 종목: <strong>${escapeHtml(data.roundModes?.[selected]?.name || modeLabels[roundModes[selected]?.id] || '')}</strong></p></section>`;
   }
 
   if (data.phase === 'intermission') {
@@ -785,8 +875,8 @@ function renderPrompt(data) {
   if (prompt.kind === 'quiz') {
     return `
       <section class="prompt-card prompt-card--quiz">
-        <div class="prompt-meta"><span class="round-badge">ROUND ${data.roundNumber}</span><span class="category-badge ${prompt.category === '순우리말' ? '' : 'category-badge--history'}">${escapeHtml(prompt.category || '뜻풀이')}</span><span class="prompt-help">${prompt.category === '순우리말' ? '이 뜻에 맞는 순우리말을 골라 주세요' : '한글 창제 원리와 세종대왕의 기록을 떠올려 골라 주세요'}</span></div>
-        ${prompt.category !== '순우리말' ? '<div class="history-ribbon">한글과 세종대왕 배움 카드</div>' : ''}
+        <div class="prompt-meta"><span class="round-badge">ROUND ${data.roundNumber}</span><span class="category-badge ${prompt.category === '순우리말' ? '' : 'category-badge--history'}">${escapeHtml(prompt.category || '뜻풀이')}</span><span class="prompt-help">${prompt.source === 'custom' ? '선생님 문제 · 보기 4개 중 정답을 골라 주세요' : prompt.category === '순우리말' ? '이 뜻에 맞는 순우리말을 골라 주세요' : '한글 창제 원리와 세종대왕의 기록을 떠올려 골라 주세요'}</span></div>
+        ${prompt.source !== 'custom' && prompt.category !== '순우리말' ? '<div class="history-ribbon">한글과 세종대왕 배움 카드</div>' : ''}
         <div class="meaning-question">${escapeHtml(prompt.meaning)}</div>
         <div class="choice-grid">${prompt.choices.map((choice, index) => `<button class="choice-button" data-choice="${escapeHtml(choice)}"><span>${String.fromCharCode(9312 + index)}</span>${escapeHtml(choice)}</button>`).join('')}</div>
         <p class="prompt-note">정답 60점 + 속도 보너스 최대 40점 · 오답 −30점<br />8초 안에 빠르게 맞힐수록 보너스가 커져요. 정답 점수에 라운드·인원 보정이 적용돼요.</p>
@@ -874,6 +964,8 @@ function render() {
 }
 
 function bindEvents() {
+  const settingsRoot = document.querySelector('#teacher-settings-root');
+  if (settingsRoot) bindTeacherSettings(settingsRoot);
   document.querySelectorAll('input[name="play-mode"]').forEach((input) => {
     input.addEventListener('change', () => { state.selectedPlayMode = input.value; });
   });

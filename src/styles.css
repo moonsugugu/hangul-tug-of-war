@@ -267,6 +267,19 @@ main { width: min(1180px, calc(100% - 36px)); margin: 0 auto 60px; }
 .play-mode-option strong { font-size: 13px; }
 .play-mode-option small, .play-mode-picker p { font-size: 11px; color: var(--muted); line-height: 1.6; }
 .play-mode-picker p { margin: 10px 0 0; }
+.teacher-settings { margin-bottom: 18px; border-radius: 20px; padding: 18px 22px; }
+.teacher-settings summary { cursor: pointer; font-weight: 700; font-size: 16px; min-height: 32px; }
+.teacher-settings-content h2 { margin: 16px 0 8px; font-size: 20px; }
+.teacher-settings-content p { line-height: 1.7; font-size: 13px; }
+.question-set-status { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; padding: 13px 15px; margin: 12px 0; border-radius: 12px; background: var(--blue-soft); }
+.question-set-status strong { color: var(--blue-dark); font-size: 14px; }
+.question-set-status span { overflow-wrap: anywhere; font-size: 12px; }
+.teacher-settings-actions { display: flex; flex-wrap: wrap; gap: 9px; margin: 14px 0; }
+.teacher-settings-actions .secondary-button { display: inline-flex; align-items: center; justify-content: center; min-height: 48px; font-size: 13px; text-decoration: none; }
+.teacher-settings .csv-format-help, .teacher-settings .csv-retention-note { color: var(--muted); font-size: 12px; }
+.csv-upload-message { padding: 12px 14px; border-radius: 12px; color: var(--blue-dark); background: var(--blue-soft); }
+.csv-upload-message.is-error { color: #a84636; background: #fff0e4; }
+button:disabled { cursor: wait; opacity: .65; }
 .choice-button span { display: block; margin-bottom: 5px; color: var(--pink); font-family: 'Jua', sans-serif; font-size: 18px; }
 .choice-button:hover, .choice-button:focus-visible { border-color: var(--blue); background: var(--blue-soft); transform: translateY(-2px); outline: none; }
 .repair-question { text-decoration: line-through; text-decoration-color: var(--pink); }
