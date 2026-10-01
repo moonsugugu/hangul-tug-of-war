@@ -27,6 +27,10 @@ const PLACEMENT_MS = Number(process.env.PLACEMENT_MS || 30_000);
 const TEAM_REVEAL_MS = Number(process.env.TEAM_REVEAL_MS || 7_000);
 const ROPE_MAX_STEPS = 20;
 const ROPE_POINTS_PER_STEP = 75;
+// 한 라운드에서 줄을 끝까지 이만큼 먼저 당긴 팀이 그 라운드를 이긴다.
+const ROPE_ENDS_TO_WIN = 5;
+// 릴레이 대표로 뽑힌 학생의 점수 배율
+const RELAY_REPRESENTATIVE_MULTIPLIER = 2;
 const MAX_PLAYERS_PER_ROOM = 30;
 const CHARACTER_IDS = ['rabbit', 'bear', 'cat', 'chick', 'panda', 'sheep', 'fox', 'penguin'];
 
@@ -36,7 +40,7 @@ const BASE_WORD_PROMPTS = [
   { word: '너울', meaning: '큰 물결', example: '바다에 너울이 일었습니다.', category: '자연' },
   { word: '모꼬지', meaning: '여러 사람이 모이는 일', example: '친구들과 즐거운 모꼬지를 열었습니다.', category: '모임' },
   { word: '미리내', meaning: '은하수', example: '밤하늘에 미리내가 흐릅니다.', category: '자연' },
-  { word: '도란도란', meaning: '여럿이 정답게 이야기하는 모양', example: '아이들이 도란도란 이야기를 나눕니다.', category: '말맛' },
+  { word: '도란도란', meaning: '여럿이 나직한 목소리로 정답게 이야기하는 소리나 모양', example: '아이들이 도란도란 이야기를 나눕니다.', category: '말맛' },
   { word: '가람', meaning: '강', example: '가람을 따라 마을이 이어졌습니다.', category: '자연' },
   { word: '아람', meaning: '잘 익은 열매가 알맞게 벌어진 모양', example: '가을 나무에 아람이 가득 열렸습니다.', category: '자연' },
   { word: '마루', meaning: '산이나 지붕의 가장 높은 곳', example: '산마루에 아침 해가 떠올랐습니다.', category: '자연' },
@@ -52,7 +56,7 @@ const BASE_WORD_PROMPTS = [
   { word: '바투', meaning: '두 대상 사이가 썩 가깝게', example: '친구와 바투 앉아 이야기를 들었습니다.', category: '모양' },
   { word: '해거름', meaning: '해가 서쪽으로 넘어갈 무렵', example: '해거름에 운동장에 긴 그림자가 생겼습니다.', category: '자연' },
   { word: '어스름', meaning: '조금 어둑한 빛이나 그때의 시간', example: '어스름이 내리자 등불을 밝혔습니다.', category: '자연' },
-  { word: '곰살궂다', meaning: '성질이 부드럽고 다정하다', example: '곰살궂은 말 한마디가 친구를 웃게 했습니다.', category: '마음' },
+  { word: '곰살궂다', meaning: '태도나 성질이 싹싹하고 다정스럽다', example: '곰살궂은 말 한마디가 친구를 웃게 했습니다.', category: '마음' },
   { word: '살뜰하다', meaning: '정성스럽고 알뜰하다', example: '서로를 살뜰하게 돌보는 교실입니다.', category: '마음' },
   { word: '소담하다', meaning: '모양이 탐스럽고 보기 좋다', example: '소담한 글씨로 한글날 카드를 꾸몄습니다.', category: '모양' },
   { word: '고즈넉하다', meaning: '고요하고 아늑하다', example: '고즈넉한 한옥 마을을 걸었습니다.', category: '모양' },
@@ -142,7 +146,7 @@ const BASE_WORD_PROMPTS = [
 ];
 
 const ADDITIONAL_WORD_PROMPTS = [
-  { word: '가랑비', meaning: '가늘고 조용히 내리는 비', example: '가랑비가 내려 우산을 펼쳤습니다.', category: '자연' },
+  { word: '가랑비', meaning: '가늘게 내리는 비로, 이슬비보다는 조금 굵은 비', example: '가랑비가 내려 우산을 펼쳤습니다.', category: '자연' },
   { word: '가랑잎', meaning: '나뭇가지에서 떨어진 마른 잎', example: '가랑잎을 밟을 때마다 바스락 소리가 났습니다.', category: '자연' },
   { word: '강바람', meaning: '강에서 불어오는 바람', example: '강바람이 불어 더위가 한결 가셨습니다.', category: '자연' },
   { word: '갯벌', meaning: '바닷물이 드나드는 모래와 진흙의 벌판', example: '갯벌에서 조개를 관찰했습니다.', category: '자연' },
@@ -158,7 +162,7 @@ const ADDITIONAL_WORD_PROMPTS = [
   { word: '들꽃', meaning: '들에서 저절로 피는 꽃', example: '들꽃 한 송이를 꺾지 않고 눈으로만 감상했습니다.', category: '자연' },
   { word: '물결', meaning: '물이 흔들려 이루는 잔무늬나 움직임', example: '연못에 물결이 동그랗게 퍼졌습니다.', category: '자연' },
   { word: '물안개', meaning: '물 위에 피어오르는 안개', example: '새벽 강 위로 물안개가 피어올랐습니다.', category: '자연' },
-  { word: '물비늘', meaning: '물결에 햇빛이 비쳐 반짝이는 모양', example: '호수의 물비늘이 햇살을 받아 빛났습니다.', category: '자연' },
+  { word: '물비늘', meaning: '잔잔한 물결이 햇살에 비쳐 물고기 비늘처럼 반짝이는 모양', example: '호수의 물비늘이 햇살을 받아 빛났습니다.', category: '자연' },
   { word: '바람결', meaning: '바람이 부는 기세나 느낌', example: '바람결에 꽃향기가 실려 왔습니다.', category: '자연' },
   { word: '보늬', meaning: '밤이나 도토리의 속껍질', example: '밤의 보늬를 조심스럽게 벗겼습니다.', category: '자연' },
   { word: '봄볕', meaning: '봄철의 따뜻한 햇볕', example: '봄볕을 쬐며 운동장을 걸었습니다.', category: '자연' },
@@ -197,7 +201,7 @@ const ADDITIONAL_WORD_PROMPTS = [
   { word: '도탑다', meaning: '서로의 관계가 깊고 정답다', example: '두 친구의 우정이 도타웠습니다.', category: '마음' },
   { word: '무던하다', meaning: '성격이 너그럽고 까다롭지 않다', example: '무던한 친구는 누구와도 잘 지냈습니다.', category: '마음' },
   { word: '벅차다', meaning: '감정이 가득하여 힘에 겹다', example: '한글날 무대에 서니 가슴이 벅찼습니다.', category: '마음' },
-  { word: '살갑다', meaning: '마음씨가 부드럽고 다정하다', example: '살가운 인사 한마디가 마음을 따뜻하게 했습니다.', category: '마음' },
+  { word: '살갑다', meaning: '마음씨가 부드럽고 상냥하다', example: '살가운 인사 한마디가 마음을 따뜻하게 했습니다.', category: '마음' },
   { word: '수더분하다', meaning: '꾸밈이 없고 소박하며 편안하다', example: '수더분한 웃음이 보기 좋았습니다.', category: '마음' },
   { word: '안쓰럽다', meaning: '여리고 힘들어 보여 마음이 아프다', example: '혼자 남은 친구가 안쓰러워 곁에 앉았습니다.', category: '마음' },
   { word: '애틋하다', meaning: '마음이 간절하고 애잔하다', example: '고향을 생각하는 마음이 애틋했습니다.', category: '마음' },
@@ -214,7 +218,7 @@ const ADDITIONAL_WORD_PROMPTS = [
   { word: '야무지다', meaning: '사람이나 일이 빈틈없이 단단하다', example: '야무지게 준비물을 챙겼습니다.', category: '마음' },
   { word: '정답다', meaning: '따뜻하고 친근한 느낌이 있다', example: '정다운 우리말로 서로를 불렀습니다.', category: '마음' },
   { word: '알뜰살뜰', meaning: '정성을 다해 빈틈없이 보살피는 모양', example: '친구들이 교실을 알뜰살뜰 가꾸었습니다.', category: '마음' },
-  { word: '오순도순', meaning: '여럿이 정답게 이야기하는 모양', example: '가족이 오순도순 둘러앉았습니다.', category: '말맛' },
+  { word: '오순도순', meaning: '서로 의좋게 지내거나 이야기하는 모양', example: '가족이 오순도순 둘러앉았습니다.', category: '말맛' },
   { word: '아기자기', meaning: '작은 것들이 예쁘게 어울려 정답다', example: '아기자기한 글씨로 표지를 꾸몄습니다.', category: '모양' },
   { word: '거닐다', meaning: '가까운 곳을 이리저리 천천히 걷다', example: '궁궐 뜰을 거닐며 옛글을 살펴보았습니다.', category: '움직임' },
   { word: '굽이치다', meaning: '길이나 물줄기가 이리저리 휘어 흐르다', example: '강물이 들판 사이로 굽이쳤습니다.', category: '움직임' },
@@ -282,7 +286,7 @@ const ADDITIONAL_WORD_PROMPTS = [
   { word: '뚜벅뚜벅', meaning: '발을 힘주어 걸을 때 나는 소리나 모양', example: '친구가 뚜벅뚜벅 교실로 들어왔습니다.', category: '말맛' },
   { word: '보글보글', meaning: '물이 끓거나 거품이 잇따라 올라오는 모양', example: '냄비에서 국물이 보글보글 끓었습니다.', category: '모양' },
   { word: '오목조목', meaning: '작은 것들이 옹기종기 모여 있는 모양', example: '오목조목한 마을 풍경을 그렸습니다.', category: '모양' },
-  { word: '올망졸망', meaning: '작은 것들이 고르지 않게 많이 모인 모양', example: '아이들이 올망졸망 모여 앉았습니다.', category: '모양' },
+  { word: '올망졸망', meaning: '귀엽고 엇비슷한 아이들이나 작은 것들이 많이 있는 모양', example: '아이들이 올망졸망 모여 앉았습니다.', category: '모양' },
   { word: '차곡차곡', meaning: '물건을 가지런히 겹쳐 쌓는 모양', example: '책을 차곡차곡 책장에 꽂았습니다.', category: '모양' },
   { word: '해죽해죽', meaning: '만족스러운 듯 입을 조금 벌리고 자꾸 웃는 모양', example: '아이들이 선물을 받고 해죽해죽 웃었습니다.', category: '움직임' },
   { word: '화들짝', meaning: '갑자기 놀라 몸을 크게 움직이는 모양', example: '문이 열리자 모두 화들짝 놀랐습니다.', category: '움직임' },
@@ -394,20 +398,42 @@ function currentPracticePrompt(progress) {
   return { id: `practice-${id}`, prompt };
 }
 
-// Alternate native-word definitions with documented Hangul/Sejong questions.
-function currentQuizPrompt(progress) {
-  const position = progress.promptIndex;
-  let id;
-  let prompt;
-  if (position % 2 === 1) {
-    const index = deckIndex(progress, 'hangul', HANGUL_CREATION_QUIZ_PROMPTS.length, Math.floor(position / 2));
-    id = `quiz-${position}-hangul-${index}`;
-    prompt = HANGUL_CREATION_QUIZ_PROMPTS[index];
-  } else {
-    const index = deckIndex(progress, 'wordQuiz', WORD_QUIZ_PROMPTS.length, Math.floor(position / 2));
-    id = `quiz-${position}-word-${index}`;
-    prompt = WORD_QUIZ_PROMPTS[index];
+// 2라운드 객관식 문제 묶음. 학생마다 따로 섞어 두고, 라운드가 바뀌거나 새 게임을 시작해도 이어서 쓴다.
+// 한 번 낸 문제는 묶음에서 빼므로 순우리말 문제와 한글 창제 문제를 모두 풀기 전에는 같은 문제가 다시 나오지 않는다.
+// (예전에는 한글 창제 문제 29개를 한 문제 걸러 내면서 29개를 다 쓰면 곧바로 다시 섞어, 빨리 푸는 반에서 같은 문제가 계속 나왔다.)
+function createQuizDeck(previous) {
+  const last = previous?.last || null;
+  return {
+    word: shuffledIndexes(WORD_QUIZ_PROMPTS.length, last?.kind === 'word' ? last.index : -1),
+    hangul: shuffledIndexes(HANGUL_CREATION_QUIZ_PROMPTS.length, last?.kind === 'hangul' ? last.index : -1),
+    last,
+  };
+}
+
+// 순우리말 뜻 문제와 한글 창제·세종대왕 문제를 번갈아 꺼내고, 한쪽을 다 쓰면 남은 쪽에서만 꺼낸다.
+function drawQuizQuestion(player) {
+  let deck = player.quizDeck;
+  if (!deck || (!deck.word.length && !deck.hangul.length)) {
+    deck = createQuizDeck(deck);
+    player.quizDeck = deck;
   }
+  const preferred = deck.last?.kind === 'word' ? 'hangul' : 'word';
+  const kind = deck[preferred].length ? preferred : preferred === 'word' ? 'hangul' : 'word';
+  const question = { kind, index: deck[kind].shift() };
+  deck.last = question;
+  return question;
+}
+
+function currentQuizPrompt(player) {
+  const progress = player.progress;
+  // 상태는 0.5초마다 다시 보내므로, 답을 내서 promptIndex가 바뀔 때만 다음 문제를 꺼낸다.
+  if (!progress.quizQuestion || progress.quizQuestionIndex !== progress.promptIndex) {
+    progress.quizQuestion = drawQuizQuestion(player);
+    progress.quizQuestionIndex = progress.promptIndex;
+  }
+  const { kind, index } = progress.quizQuestion;
+  const id = `quiz-${progress.promptIndex}-${kind}-${index}`;
+  const prompt = kind === 'hangul' ? HANGUL_CREATION_QUIZ_PROMPTS[index] : WORD_QUIZ_PROMPTS[index];
 
   // Keep each question's randomized choices stable across frequent state broadcasts,
   // and avoid putting the answer in the same position twice in a row.
@@ -510,7 +536,7 @@ const MODES = [
   { id: 'word', name: '말모이 기본전', description: '더 다양해진 순우리말을 빠르고 정확하게 입력해요.', duration: ROUND_DURATION_MS },
   { id: 'quiz', name: '뜻풀이 객관식 역전전', description: '네 가지 보기로 순우리말과 한글 역사를 풀어요. 오답은 30점 감점!', duration: ROUND_DURATION_MS },
   { id: 'repair', name: '바른말 수리공', description: '띄어쓰기를 제대로 해서 바른 문장을 완성해요.', duration: ROUND_DURATION_MS },
-  { id: 'relay', name: '훈민정음 랜덤 릴레이', description: '대표가 정답을 맞히면 줄을 2칸 당기고, 친구들의 정답은 1점씩 보태요.', duration: ROUND_DURATION_MS },
+  { id: 'relay', name: '훈민정음 랜덤 릴레이', description: '모두 같은 문장을 입력해 점수만큼 줄을 당겨요. 대표로 뽑히면 점수가 2배!', duration: ROUND_DURATION_MS },
 ];
 
 const MIME_TYPES = {
@@ -540,6 +566,9 @@ function createGame() {
     overtimeCount: 0,
     scores: { blue: 0, white: 0 },
     rawScores: { blue: 0, white: 0 },
+    // 이번 라운드에서 줄을 끝까지 당긴 횟수와, 줄을 가운데로 되돌린 순간의 점수 차(청 - 백)
+    ropeEnds: { blue: 0, white: 0 },
+    ropeBaseline: 0,
     roundScores: [],
     rosterCounts: { blue: 0, white: 0 },
     relay: null,
@@ -656,6 +685,13 @@ function getMode(room) {
   return MODES[game.modeIndex] || null;
 }
 
+// 줄은 마지막으로 가운데로 돌아온 뒤의 점수 차만큼 움직인다. 점수 차 75점이 한 칸이고,
+// 어느 팀이든 상대 점수와 상관없이 20칸 끝까지 당길 수 있다.
+function getRopeStep(game) {
+  const difference = game.scores.blue - game.scores.white - (game.ropeBaseline || 0);
+  return Math.max(-ROPE_MAX_STEPS, Math.min(ROPE_MAX_STEPS, -Math.round(difference / ROPE_POINTS_PER_STEP)));
+}
+
 function getPromptFor(room, player) {
   const game = room.game;
   if (game.phase === 'lobby' && player?.progress) {
@@ -683,7 +719,7 @@ function getPromptFor(room, player) {
   }
 
   if (mode.id === 'quiz') {
-    const { id, prompt } = currentQuizPrompt(player.progress);
+    const { id, prompt } = currentQuizPrompt(player);
     return { kind: 'quiz', id, category: prompt.category, meaning: prompt.meaning, choices: prompt.choices };
   }
 
@@ -711,10 +747,7 @@ function publicStateFor(room, player) {
   const game = room.game;
   const counts = getCounts(room);
   const multipliers = getMultipliers(room);
-  const difference = game.scores.blue - game.scores.white;
-  // One visible step is roughly one accurate answer. Either team can pull the
-  // center marker through all twenty steps, even if the other team has no score.
-  const ropeStep = Math.max(-ROPE_MAX_STEPS, Math.min(ROPE_MAX_STEPS, -Math.round(difference / ROPE_POINTS_PER_STEP)));
+  const ropeStep = getRopeStep(game);
   const ropePosition = 50 + ropeStep * (43 / ROPE_MAX_STEPS);
   const mode = getMode(room);
 
@@ -753,6 +786,9 @@ function publicStateFor(room, player) {
     ropePosition,
     ropeStep,
     ropeMaxSteps: ROPE_MAX_STEPS,
+    ropeEnds: { ...game.ropeEnds },
+    ropeEndsToWin: ROPE_ENDS_TO_WIN,
+    relayRepresentativeMultiplier: RELAY_REPRESENTATIVE_MULTIPLIER,
     winner: game.winner,
     notice: game.notice,
     self: player ? {
@@ -815,11 +851,17 @@ function setNotice(room, text) {
   }, 3_000);
 }
 
+// 줄이 한쪽 끝(20칸)에 닿으면 그 팀의 '끝까지 당긴 횟수'를 1 올리고 줄을 가운데로 되돌린다.
+// 1~4라운드(와 결승) 모두 ROPE_ENDS_TO_WIN번을 먼저 채운 팀이 그 라운드를 이긴다. 릴레이도 같다.
 function checkRopeWin(room) {
-  // Relay keeps rotating representatives until its round timer expires.
-  if (room.game.mode === 'relay') return;
-  const ropeStep = publicStateFor(room, null).ropeStep;
-  if (Math.abs(ropeStep) === ROPE_MAX_STEPS) finishRound(room, 'rope');
+  const game = room.game;
+  if (game.phase !== 'round') return;
+  const ropeStep = getRopeStep(game);
+  if (Math.abs(ropeStep) < ROPE_MAX_STEPS) return;
+  const team = ropeStep < 0 ? 'blue' : 'white';
+  game.ropeEnds[team] += 1;
+  game.ropeBaseline = game.scores.blue - game.scores.white;
+  if (game.ropeEnds[team] >= ROPE_ENDS_TO_WIN) finishRound(room, 'rope');
 }
 
 function addTeamScore(room, team, score, checkWin = true) {
@@ -841,14 +883,10 @@ function subtractTeamScore(room, team, points) {
   checkRopeWin(room);
 }
 
-function addRelayScore(room, team, score) {
-  const points = Math.max(0, score);
-  if (!points) return;
-  const game = room.game;
-  // Relay points are literal: an exact representative answer is 150 points
-  // (two 75-point rope steps), while each supporter adds exactly one point.
-  game.rawScores[team] += points / getMultipliers(room)[team];
-  game.scores[team] += points;
+// 릴레이도 다른 라운드처럼 한 사람 한 사람의 타자 점수(정확도·속도)가 팀 점수가 되어 줄을 당긴다.
+// 대표로 뽑힌 학생의 점수만 2배로 들어간다. 라운드 배율과 인원 보정은 addTeamScore가 적용한다.
+function relayScoreFor(result, representative) {
+  return result.score * (representative ? RELAY_REPRESENTATIVE_MULTIPLIER : 1);
 }
 
 // Clients flash a player's name tag whenever this counter goes up.
@@ -900,6 +938,8 @@ function queueRound(room, index) {
   game.roundIntroUntil = Date.now() + ROUND_INTRO_MS;
   game.scores = { blue: 0, white: 0 };
   game.rawScores = { blue: 0, white: 0 };
+  game.ropeEnds = { blue: 0, white: 0 };
+  game.ropeBaseline = 0;
   game.relay = null;
   game.notice = `${index === MODES.length ? '결승' : `${index + 1}라운드`} · ${mode.name} 규칙을 확인하세요!`;
   if (ROUND_INTRO_MS <= 0) beginRound(room, index);
@@ -921,6 +961,8 @@ function beginRound(room, index) {
   game.overtimeCount = 0;
   game.scores = { blue: 0, white: 0 };
   game.rawScores = { blue: 0, white: 0 };
+  game.ropeEnds = { blue: 0, white: 0 };
+  game.ropeBaseline = 0;
   game.notice = `${index === MODES.length ? '결승' : `${index + 1}라운드`} · ${mode.name}`;
   game.relay = null;
   game.relayUsed = { blue: new Set(), white: new Set() };
@@ -936,8 +978,14 @@ function finishRound(room, reason = 'time') {
   if (reason === 'time') settleRoundDrafts(room);
   const bluePoints = Math.round(game.scores.blue);
   const whitePoints = Math.round(game.scores.white);
-  const relayTiebreak = bluePoints === whitePoints && game.mode === 'relay' && game.overtimeCount >= MAX_RELAY_OVERTIMES;
-  if (bluePoints === whitePoints && !relayTiebreak) {
+  const ropeEnds = { ...game.ropeEnds };
+  // 끝까지 당긴 횟수가 많은 팀이 이긴다. 횟수가 같으면 지금 줄이 기운 쪽
+  // (마지막으로 가운데로 돌아온 뒤의 점수 차)이 이기고, 그것도 같으면 연장전을 한다.
+  const lead = ropeEnds.blue !== ropeEnds.white
+    ? ropeEnds.blue - ropeEnds.white
+    : Math.round(game.scores.blue - game.scores.white - game.ropeBaseline);
+  const relayTiebreak = lead === 0 && game.mode === 'relay' && game.overtimeCount >= MAX_RELAY_OVERTIMES;
+  if (lead === 0 && !relayTiebreak) {
     game.overtimeCount += 1;
     game.roundEndsAt = Date.now() + OVERTIME_MS;
     game.notice = `동점! ${Math.round(OVERTIME_MS / 1000)}초 연장전이 시작됩니다.`;
@@ -945,12 +993,13 @@ function finishRound(room, reason = 'time') {
     broadcast(room);
     return;
   }
-  const winner = relayTiebreak ? (Math.random() < 0.5 ? 'blue' : 'white') : bluePoints > whitePoints ? 'blue' : 'white';
+  const winner = relayTiebreak ? (Math.random() < 0.5 ? 'blue' : 'white') : lead > 0 ? 'blue' : 'white';
   const roundScore = {
     round: game.roundIndex + 1,
     mode: getMode(room)?.name || '',
     blue: bluePoints,
     white: whitePoints,
+    ropeEnds,
     winner,
     reason: relayTiebreak ? 'tiebreak' : reason,
     overtimeCount: game.overtimeCount,
@@ -982,7 +1031,9 @@ function finishRound(room, reason = 'time') {
   game.intermissionUntil = Date.now() + INTERMISSION_MS;
   game.notice = relayTiebreak
     ? `연장 2회 후에도 동점이라 추첨으로 ${winner === 'blue' ? '청팀' : '백팀'}이 승리했어요. 다음 라운드를 준비하세요.`
-    : `${game.roundIndex + 1}라운드 ${winner === 'blue' ? '청팀' : '백팀'} 승리! 다음 라운드를 준비하세요.`;
+    : reason === 'rope'
+      ? `${game.roundIndex + 1}라운드 ${winner === 'blue' ? '청팀' : '백팀'} 승리! 줄을 끝까지 ${ROPE_ENDS_TO_WIN}번 먼저 당겼어요. 다음 라운드를 준비하세요.`
+      : `${game.roundIndex + 1}라운드 ${winner === 'blue' ? '청팀' : '백팀'} 승리! 다음 라운드를 준비하세요.`;
   broadcast(room);
 }
 
@@ -1066,12 +1117,12 @@ function settleRelayDrafts(room, relay) {
     if (!draft || draft.kind !== 'relay' || draft.deadline !== relay.deadline || relay.submissions[player.id] || !normalizeSentence(draft.text)) continue;
     const result = calculateTypedScore(draft.text, relay.prompt, Date.now() - relay.startedAt, 'repair');
     const representative = player.id === relay.blueId || player.id === relay.whiteId;
-    const maxScore = representative ? ROPE_POINTS_PER_STEP * 2 : 1;
-    const score = result.exact ? maxScore : result.score / 100 * maxScore;
+    const score = relayScoreFor(result, representative);
     relay.submissions[player.id] = { team: player.team, exact: result.exact, score };
     if (score > 0) {
       creditPlayer(player, score);
-      addRelayScore(room, player.team, score);
+      // 여러 명을 한꺼번에 정산하므로 줄 끝 판정은 다 더한 뒤 한 번만 한다(finishRelayDuel).
+      addTeamScore(room, player.team, score, false);
       send(player.ws, { type: 'timeoutScore', score, relay: true, representative });
     }
   }
@@ -1198,13 +1249,15 @@ function handleTypedAnswer(player, answer) {
   broadcast(room);
 }
 
-function handleChoice(player, choice) {
+function handleChoice(player, choice, promptId) {
   const room = getRoomForPlayer(player);
   if (!room) return;
   const game = room.game;
-  if (game.phase !== 'round' || getMode(room)?.id !== 'quiz') return;
+  if (game.phase !== 'round' || getMode(room)?.id !== 'quiz' || !player.progress) return;
   if (Date.now() >= game.roundEndsAt) return finishRound(room);
-  const { prompt } = currentQuizPrompt(player.progress);
+  const { id, prompt } = currentQuizPrompt(player);
+  // 보기를 두 번 누른 경우처럼 이미 지나간 문제에 늦게 도착한 답은 다음 문제에 적용하지 않는다.
+  if (promptId !== undefined && promptId !== id) return;
   const elapsedMs = Date.now() - player.progress.promptStartedAt;
   const correct = choice === prompt.answer;
   const speedBonus = Math.max(0, 40 * (1 - Math.min(elapsedMs, 8_000) / 8_000));
@@ -1242,15 +1295,15 @@ function handleRelayAnswer(player, answer, deadline) {
   const team = relay.blueId === player.id ? 'blue' : relay.whiteId === player.id ? 'white' : null;
   if (!player.team || player.spectator || relay.submissions[player.id] || relay.lastResult) return;
 
-  const exact = normalizeSentence(answer) === normalizeSentence(relay.prompt);
   const representative = Boolean(team);
-  const score = exact ? representative ? ROPE_POINTS_PER_STEP * 2 : 1 : 0;
+  const result = calculateTypedScore(String(answer ?? '').slice(0, 500), relay.prompt, Date.now() - relay.startedAt, 'repair');
+  const score = relayScoreFor(result, representative);
   player.roundDraft = null;
-  relay.submissions[player.id] = { team: player.team, exact, score };
-  send(player.ws, { type: 'relayAnswerResult', correct: exact, score, representative });
-  if (score) {
+  relay.submissions[player.id] = { team: player.team, exact: result.exact, score };
+  send(player.ws, { type: 'relayAnswerResult', correct: result.exact, score, representative });
+  if (score > 0) {
     creditPlayer(player, score);
-    addRelayScore(room, player.team, score);
+    addTeamScore(room, player.team, score);
   }
   if (game.phase !== 'round') return;
   if (getActivePlayers(room).every((entry) => relay.submissions[entry.id])) finishRelayDuel(room);
@@ -1401,7 +1454,7 @@ function handleMessage(ws, rawMessage) {
   if (message.type === 'start') return startGame(player);
   if (message.type === 'restart') return resetToLobby(player);
   if (message.type === 'answer') return handleTypedAnswer(player, message.answer);
-  if (message.type === 'choice') return handleChoice(player, message.choice);
+  if (message.type === 'choice') return handleChoice(player, message.choice, message.promptId);
   if (message.type === 'relayAnswer') return handleRelayAnswer(player, message.answer, message.deadline);
   if (message.type === 'draft') return handleDraft(player, message);
 }

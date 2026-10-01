@@ -72,8 +72,26 @@ const roundGuides = {
   word: '화면에 나온 순우리말을 정확히 입력하세요. 정확하고 빠를수록 줄을 더 당깁니다.',
   quiz: '네 가지 보기 중 정답을 고르세요. 오답이면 우리 팀 점수가 30점 깎이니 신중하게 골라 주세요!',
   repair: '잘못 붙은 문장을 올바르게 띄어 써서 입력하세요.',
-  relay: '대표가 정답을 맞히면 줄이 2칸 움직여요. 친구들은 같은 문장을 입력해 1점씩 보태고, 제한시간까지 대표가 계속 바뀝니다.',
+  relay: '모두 같은 문장을 입력해요. 다른 라운드처럼 정확하고 빠를수록 점수가 올라 줄을 당기고, 대표로 뽑힌 친구의 점수는 2배로 들어가요. 대결마다 대표가 바뀝니다.',
 };
+
+// 모든 라운드(결승 포함)에 똑같이 적용되는 줄 규칙
+function ropeRuleText(data) {
+  return `줄을 끝까지 ${data?.ropeEndsToWin || 5}번 먼저 당긴 팀이 라운드 승리! 끝에 닿을 때마다 줄은 가운데로 돌아가요.`;
+}
+
+function roundGuideFor(data) {
+  return `${roundGuides[data?.mode?.id] || data?.mode?.description || ''} ${ropeRuleText(data)}`.trim();
+}
+
+function ropeEndsLabel(data, team) {
+  return `끝까지 ${data?.ropeEnds?.[team] || 0}/${data?.ropeEndsToWin || 5}번`;
+}
+
+function scoringRuleFor(data, team) {
+  const correction = `인원 보정 ×${Number(data?.multipliers?.[team] || 1).toFixed(2)}`;
+  return data?.mode?.id === 'relay' ? `대표 점수 ×${data.relayRepresentativeMultiplier || 2} · ${correction}` : correction;
+}
 
 function winningTeamForCelebration(data) {
   if (!['intermission', 'wheel', 'results'].includes(data.phase)) return null;
@@ -89,6 +107,24 @@ function celebrateWinIfNeeded(data) {
   if (key === lastCelebrationKey) return;
   lastCelebrationKey = key;
   void playVictorySound().catch(() => {});
+}
+
+// 라운드 도중 줄이 한쪽 끝에 닿으면(마지막 승리 순간 제외) 몇 번째인지 알려 준다.
+let lastRopeEndsKey = '';
+let lastRopeEnds = { blue: 0, white: 0 };
+function announceRopeEnds(data) {
+  const ends = data.ropeEnds || { blue: 0, white: 0 };
+  const key = `${data.roomId}:${data.roundIndex}`;
+  if (key !== lastRopeEndsKey) {
+    lastRopeEndsKey = key;
+    lastRopeEnds = { ...ends };
+    return;
+  }
+  if (data.phase === 'round') {
+    const team = ['blue', 'white'].find((entry) => (ends[entry] || 0) > (lastRopeEnds[entry] || 0));
+    if (team) showNotice(`${teamName(team)}이 줄을 끝까지 당겼어요! (${ends[team]}/${data.ropeEndsToWin || 5}번) 줄이 가운데로 돌아가요.`);
+  }
+  lastRopeEnds = { ...ends };
 }
 
 const roundModes = [
@@ -157,6 +193,7 @@ function connect() {
       state.data = message;
       state.joined = Boolean(message.self);
       celebrateWinIfNeeded(message);
+      announceRopeEnds(message);
       trackScoreFlashes(message.players);
       updateDynamic();
       // The page (and its 3D arena) is rebuilt only when the page itself changes;
@@ -226,7 +263,10 @@ function connect() {
       return;
     }
     if (message.type === 'relayAnswerResult') {
-      state.result = { correct: message.correct, score: message.score, title: message.correct ? (message.representative ? '대표 정답! 줄 2칸 이동!' : '응원 점수 +1점!') : '아쉬워요, 다음 문장에서 다시 도전해요' };
+      const title = message.correct
+        ? (message.representative ? '대표 정답! 점수 2배로 줄을 당겨요!' : '정답! 내 점수만큼 줄을 당겨요!')
+        : message.score > 0 ? '아쉬워요, 맞게 쓴 만큼 점수를 보태요' : '아쉬워요, 다음 문장에서 다시 도전해요';
+      state.result = { correct: message.correct, score: message.score, title };
       state.draft = '';
       renderResultToast();
       return;
@@ -236,7 +276,7 @@ function connect() {
         correct: true,
         score: message.score,
         title: message.relay
-          ? message.representative ? '시간 종료! 대표가 쓴 만큼 줄을 당겨요' : '시간 종료! 응원 부분 점수'
+          ? message.representative ? '시간 종료! 대표가 쓴 만큼 2배 점수' : '시간 종료! 입력한 만큼 부분 점수'
           : '시간 종료! 입력한 만큼 부분 점수',
       };
       state.draft = '';
@@ -357,8 +397,8 @@ function submitAnswer() {
   send({ type: 'answer', answer });
 }
 
-function submitChoice(choice) {
-  send({ type: 'choice', choice });
+function submitChoice(choice, promptId) {
+  send({ type: 'choice', choice, promptId });
 }
 
 function submitRelay() {
@@ -514,7 +554,7 @@ function renderLobby() {
           ${renderCharacterPicker()}
           ${renderRoomEntryControls()}
           <div class="rules-mini"><span>01</span><p>순우리말과 한글 문장을 입력해요.</p></div>
-          <div class="rules-mini"><span>02</span><p>점수가 팀의 줄을 움직여요.</p></div>
+          <div class="rules-mini"><span>02</span><p>점수가 팀의 줄을 움직여요. 줄을 끝까지 5번 먼저 당기면 라운드 승리!</p></div>
           <div class="rules-mini"><span>03</span><p>각 라운드 3분! 4라운드 뒤 2:2면 돌림판 결승을 진행해요.</p></div>
         </div>
       </section>
@@ -647,21 +687,18 @@ function renderTeamReveal(data) {
 function renderScoreboard(data) {
   const mine = (team) => (data.self?.team === team ? ' is-mine' : '');
   const mineTag = (team) => (data.self?.team === team ? '<span class="mine-tag">우리 팀</span>' : '');
-  const scoringRule = (team) => data.mode?.id === 'relay'
-    ? '대표 정답 2칸 · 응원 정답 1점'
-    : `인원 보정 ×${data.multipliers[team].toFixed(2)}`;
   return `
     <div class="scoreboard">
       <div class="score-card score-card--blue${mine('blue')}">
         <div class="score-card__label"><span class="dot"></span> 청팀 <small id="blue-count">${data.counts.blue}명</small>${mineTag('blue')}</div>
         <strong id="blue-score">${formatScore(data.scores.blue)}</strong>
-        <small class="multiplier" id="blue-multiplier">${scoringRule('blue')}</small><span class="round-wins" id="blue-wins">라운드 ${data.roundWins?.blue || 0}승</span>
+        <small class="multiplier" id="blue-multiplier">${scoringRuleFor(data, 'blue')}</small><span class="round-wins" id="blue-wins">라운드 ${data.roundWins?.blue || 0}승</span><span class="rope-ends" id="blue-ends">${ropeEndsLabel(data, 'blue')}</span>
       </div>
       <div class="score-vs">VS</div>
       <div class="score-card score-card--white${mine('white')}">
         <div class="score-card__label"><span class="dot"></span> 백팀 <small id="white-count">${data.counts.white}명</small>${mineTag('white')}</div>
         <strong id="white-score">${formatScore(data.scores.white)}</strong>
-        <small class="multiplier" id="white-multiplier">${scoringRule('white')}</small><span class="round-wins" id="white-wins">라운드 ${data.roundWins?.white || 0}승</span>
+        <small class="multiplier" id="white-multiplier">${scoringRuleFor(data, 'white')}</small><span class="round-wins" id="white-wins">라운드 ${data.roundWins?.white || 0}승</span><span class="rope-ends" id="white-ends">${ropeEndsLabel(data, 'white')}</span>
       </div>
     </div>
   `;
@@ -689,7 +726,7 @@ function renderArena(data) {
           </div>
           <span class="scene-team-tag scene-team-tag--white" aria-hidden="true">백팀 · ${data.counts.white}명</span>
         </div>
-        ${data.phase === 'roundIntro' ? `<div class="round-intro-overlay" role="status"><span>${data.roundNumber === 5 ? '결승' : `${data.roundNumber}라운드`} 시작 안내</span><h2>${escapeHtml(data.mode?.name || '')}</h2><p>${escapeHtml(roundGuides[data.mode?.id] || data.mode?.description || '')}</p><strong><span class="intro-time">${getTimeLabel(data.roundIntroRemainingMs)}</span> 뒤 시작!</strong></div>` : ''}
+        ${data.phase === 'roundIntro' ? `<div class="round-intro-overlay" role="status"><span>${data.roundNumber === 5 ? '결승' : `${data.roundNumber}라운드`} 시작 안내</span><h2>${escapeHtml(data.mode?.name || '')}</h2><p>${escapeHtml(roundGuideFor(data))}</p><strong><span class="intro-time">${getTimeLabel(data.roundIntroRemainingMs)}</span> 뒤 시작!</strong></div>` : ''}
         ${victoryTeam ? `<div class="victory-celebration victory-celebration--${victoryTeam}" role="status">${fireworks}<strong>${teamName(victoryTeam)} 승리! 🎉</strong></div>` : ''}
         <div class="scene-step-track" aria-hidden="true"><b>청</b>${Array.from({ length: maxSteps * 2 + 1 }, (_, index) => `<i class="rope-step ${index === maxSteps ? 'is-center' : ''} ${index === maxSteps + ropeStep ? 'is-current' : ''}" data-rope-tick="${index}"></i>`).join('')}<b>백</b></div>
         <div class="scene-position-label" aria-live="polite">${getRopeStepLabel(data)}</div>
@@ -736,7 +773,7 @@ async function toggleBgm() {
 
 function renderPrompt(data) {
   if (data.phase === 'roundIntro') {
-    return `<section class="prompt-card round-intro-card"><span class="round-badge">${data.roundNumber === 5 ? 'FINAL ROUND' : `ROUND ${data.roundNumber}`}</span><h2>${escapeHtml(data.mode?.name || '')}</h2><p>${escapeHtml(roundGuides[data.mode?.id] || data.mode?.description || '')}</p><div class="next-countdown"><span class="intro-time">${getTimeLabel(data.roundIntroRemainingMs)}</span> 뒤 시작해요!</div></section>`;
+    return `<section class="prompt-card round-intro-card"><span class="round-badge">${data.roundNumber === 5 ? 'FINAL ROUND' : `ROUND ${data.roundNumber}`}</span><h2>${escapeHtml(data.mode?.name || '')}</h2><p>${escapeHtml(roundGuideFor(data))}</p><div class="next-countdown"><span class="intro-time">${getTimeLabel(data.roundIntroRemainingMs)}</span> 뒤 시작해요!</div></section>`;
   }
   if (data.phase === 'wheel') {
     const selected = Number(data.wheelSelectedIndex ?? 0);
@@ -745,7 +782,8 @@ function renderPrompt(data) {
 
   if (data.phase === 'intermission') {
     const lastRound = data.roundScores?.at(-1);
-    return `<section class="prompt-card intermission-card"><span class="round-badge">ROUND ${data.roundNumber} RESULT</span><h2>${teamName(lastRound?.winner)} 라운드 승리!</h2><p>${escapeHtml(data.notice || '')}</p><div class="round-result-score">청 ${formatScore(lastRound?.blue)} : ${formatScore(lastRound?.white)} 백</div><div class="next-countdown">다음 라운드 ${getTimeLabel(data.intermissionRemainingMs)}</div></section>`;
+    const ends = lastRound?.ropeEnds || { blue: 0, white: 0 };
+    return `<section class="prompt-card intermission-card"><span class="round-badge">ROUND ${data.roundNumber} RESULT</span><h2>${teamName(lastRound?.winner)} 라운드 승리!</h2><p>${escapeHtml(data.notice || '')}</p><div class="round-result-score">끝까지 당긴 횟수 청 ${ends.blue} : ${ends.white} 백</div><p>점수 청 ${formatScore(lastRound?.blue)} : ${formatScore(lastRound?.white)} 백</p><div class="next-countdown">다음 라운드 ${getTimeLabel(data.intermissionRemainingMs)}</div></section>`;
   }
 
   if (data.phase === 'results') {
@@ -794,11 +832,11 @@ function renderPrompt(data) {
     const representativeName = (id) => (data.players || []).find((player) => player.id === id)?.name || '선정 중';
     return `
       <section class="prompt-card prompt-card--relay">
-        <div class="prompt-meta"><span class="round-badge">ROUND ${data.roundNumber}${data.roundNumber === 5 ? ' FINAL' : ''}</span><span class="prompt-help">${selected ? '당신이 이번 팀 대표예요! 정답이면 줄 2칸 이동' : '대표를 응원하며 같은 문장을 입력하면 1점'}</span></div>
+        <div class="prompt-meta"><span class="round-badge">ROUND ${data.roundNumber}${data.roundNumber === 5 ? ' FINAL' : ''}</span><span class="prompt-help">${selected ? '당신이 이번 팀 대표예요! 내 점수가 2배로 들어가요' : '같은 문장을 입력하면 내 점수만큼 줄을 당겨요'}</span></div>
         <div class="relay-versus"><span>청팀 대표 <strong>${escapeHtml(representativeName(data.relay?.blueId))}</strong></span><b>VS</b><span>백팀 대표 <strong>${escapeHtml(representativeName(data.relay?.whiteId))}</strong></span></div>
         <div class="relay-sentence">${escapeHtml(prompt.prompt)}</div>
-        <p class="relay-scoring-note">대표 정답: 줄 2칸 이동 · 응원 정답: 1점 · 제한시간까지 대표가 계속 바뀌어요</p>
-        ${prompt.submitted ? '<div class="spectator-message">입력 완료! 다음 문장을 기다려 주세요.</div>' : `<form id="answer-form" class="answer-form"><input id="answer-input" class="answer-input" autocomplete="off" spellcheck="false" placeholder="문장을 똑같이 입력해 주세요" /><button class="submit-button">${selected ? '대표 출전' : '응원 보태기'} <span>↗</span></button></form>`}
+        <p class="relay-scoring-note">모두의 점수가 줄을 당겨요 · 대표 점수 2배 · 대결마다 대표가 바뀌어요</p>
+        ${prompt.submitted ? '<div class="spectator-message">입력 완료! 다음 문장을 기다려 주세요.</div>' : `<form id="answer-form" class="answer-form"><input id="answer-input" class="answer-input" autocomplete="off" spellcheck="false" placeholder="문장을 똑같이 입력해 주세요" /><button class="submit-button">${selected ? '대표 출전' : '함께 당기기'} <span>↗</span></button></form>`}
       </section>
     `;
   }
@@ -897,7 +935,7 @@ function bindPromptEvents(root) {
     else submitAnswer();
   });
   root.querySelectorAll('[data-choice]').forEach((button) => {
-    button.addEventListener('click', () => submitChoice(button.dataset.choice));
+    button.addEventListener('click', () => submitChoice(button.dataset.choice, boundPrompt?.id));
   });
   root.querySelector('#answer-input')?.addEventListener('compositionstart', () => { isComposing = true; });
   root.querySelector('#answer-input')?.addEventListener('compositionend', (event) => {
@@ -949,13 +987,14 @@ function updateDynamic() {
   if (whiteScore) whiteScore.textContent = formatScore(data.scores?.white);
   if (blueCount) blueCount.textContent = `${data.counts?.blue || 0}명`;
   if (whiteCount) whiteCount.textContent = `${data.counts?.white || 0}명`;
-  const scoringRule = (team) => data.mode?.id === 'relay'
-    ? '대표 정답 2칸 · 응원 정답 1점'
-    : `인원 보정 ×${Number(data.multipliers?.[team] || 1).toFixed(2)}`;
-  if (blueMultiplier) blueMultiplier.textContent = scoringRule('blue');
-  if (whiteMultiplier) whiteMultiplier.textContent = scoringRule('white');
+  if (blueMultiplier) blueMultiplier.textContent = scoringRuleFor(data, 'blue');
+  if (whiteMultiplier) whiteMultiplier.textContent = scoringRuleFor(data, 'white');
   if (blueWins) blueWins.textContent = `라운드 ${data.roundWins?.blue || 0}승`;
   if (whiteWins) whiteWins.textContent = `라운드 ${data.roundWins?.white || 0}승`;
+  const blueEnds = document.querySelector('#blue-ends');
+  const whiteEnds = document.querySelector('#white-ends');
+  if (blueEnds) blueEnds.textContent = ropeEndsLabel(data, 'blue');
+  if (whiteEnds) whiteEnds.textContent = ropeEndsLabel(data, 'white');
   const wheelTime = document.querySelector('#wheel-time');
   if (wheelTime) wheelTime.textContent = getTimeLabel(data.wheelRemainingMs);
   const placementTime = document.querySelector('#placement-time');
