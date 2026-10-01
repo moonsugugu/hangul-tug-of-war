@@ -17,6 +17,8 @@ const state = {
   soundEnabled: false,
   nickname: '',
   selectedCharacter: 'bear',
+  selectedPlayMode: 'typing',
+  pendingChoiceId: null,
 };
 
 let socket;
@@ -155,6 +157,7 @@ function connect() {
       state.roomId = normalizeRoomId(message.roomId) || state.roomId;
       state.roomUrl = message.roomUrl || state.roomUrl;
       state.data = message;
+      if (message.prompt?.id !== state.pendingChoiceId) state.pendingChoiceId = null;
       state.joined = Boolean(message.self);
       celebrateWinIfNeeded(message);
       trackScoreFlashes(message.players);
@@ -287,7 +290,7 @@ function createRoom() {
     input?.focus();
     return;
   }
-  send({ type: 'createRoom', name, characterId: state.selectedCharacter });
+  send({ type: 'createRoom', name, characterId: state.selectedCharacter, playMode: state.selectedPlayMode });
 }
 
 function joinByRoomCode() {
@@ -358,7 +361,11 @@ function submitAnswer() {
 }
 
 function submitChoice(choice) {
-  send({ type: 'choice', choice });
+  const prompt = state.data?.prompt;
+  if (!state.connected || prompt?.kind !== 'quiz' || state.pendingChoiceId === prompt.id) return;
+  state.pendingChoiceId = prompt.id;
+  document.querySelectorAll('[data-choice]').forEach((button) => { button.disabled = true; });
+  send({ type: 'choice', choice, promptId: prompt.id });
 }
 
 function submitRelay() {
@@ -455,6 +462,12 @@ function renderRoomEntryControls() {
   }
 
   return `
+    <fieldset class="play-mode-picker">
+      <legend>방 모드</legend>
+      <label class="play-mode-option"><input type="radio" name="play-mode" value="typing" ${state.selectedPlayMode === 'typing' ? 'checked' : ''} /><span><strong>기존 타자 모드</strong><small>타자 실력으로 팀 배정 · 타자와 퀴즈 4종목</small></span></label>
+      <label class="play-mode-option"><input type="radio" name="play-mode" value="tablet" ${state.selectedPlayMode === 'tablet' ? 'checked' : ''} /><span><strong>태블릿 객관식 모드</strong><small>키보드 없이 터치로만 경기 · 모든 문제 보기 4개</small></span></label>
+      <p>객관식 정답 60점 + 빠른 정답 보너스 최대 40점 · 오답 −30점</p>
+    </fieldset>
     <button id="create-room-button" class="primary-button">방 만들기 <span>＋</span></button>
     <div class="room-divider"><span>또는</span></div>
     <div class="room-code-entry">
@@ -507,13 +520,13 @@ function renderLobby() {
         <div class="join-card panel-card">
           <div class="section-kicker">${state.roomId ? '방 입장' : '방 만들기'}</div>
           <h2>${state.roomId ? '초대받은 방에 들어가요' : '방을 만들고 친구를 불러요'}</h2>
-          <p class="muted">게임 안에서 사용할 닉네임을 입력해 주세요. 게임을 시작하면 타자 실력을 재서 비슷한 실력으로 팀을 나눠요. 한 방에 최대 30명까지 함께할 수 있어요.</p>
+          <p class="muted">닉네임과 캐릭터를 고르고 입장해요. 방을 만들 때 타자 모드 또는 태블릿 객관식 모드를 선택할 수 있어요. 한 방에 최대 30명까지 함께할 수 있어요.</p>
           <label class="field-label" for="nickname">닉네임</label>
           <input id="nickname" class="text-input" maxlength="18" autocomplete="nickname" placeholder="예: 한별" value="${escapeHtml(state.nickname)}" />
           <div class="field-label character-field-label">내 캐릭터 <span>하나를 골라 주세요</span></div>
           ${renderCharacterPicker()}
           ${renderRoomEntryControls()}
-          <div class="rules-mini"><span>01</span><p>순우리말과 한글 문장을 입력해요.</p></div>
+          <div class="rules-mini"><span>01</span><p>타자로 입력하거나 태블릿에서 정답 보기를 터치해요.</p></div>
           <div class="rules-mini"><span>02</span><p>점수가 팀의 줄을 움직여요.</p></div>
           <div class="rules-mini"><span>03</span><p>각 라운드 3분! 4라운드 뒤 2:2면 돌림판 결승을 진행해요.</p></div>
         </div>
@@ -530,7 +543,7 @@ function renderLobby() {
         <div>
           <div class="section-kicker">WAITING ROOM</div>
           <h1>모두 모이면 시작해요</h1>
-          <p class="muted">현재 ${players.length}/${data?.maxPlayers || 30}명 · 시작 전에는 우리말 타자로 자유롭게 연습하고, 방장이 시작하면 30초 실력 판정 뒤 자동으로 팀을 나눠요.</p>
+          <p class="muted">현재 ${players.length}/${data?.maxPlayers || 30}명 · ${data?.playMode === 'tablet' ? '태블릿 객관식 모드 · 터치로만 경기하고 팀은 무작위로 나눠요.' : '기존 타자 모드 · 자유 연습 뒤 타자 실력을 재서 팀을 나눠요.'}</p>
         </div>
         ${isHost ? '<button id="start-button" class="primary-button compact">게임 시작 <span>→</span></button>' : '<span class="waiting-pill"><i></i> 진행자를 기다리는 중</span>'}
       </div>
@@ -546,7 +559,7 @@ function renderLobby() {
       </article>
       <div class="how-to panel-card">
         <div><span class="how-icon">✦</span><strong>게임 규칙</strong></div>
-        <p>위 연습은 점수에 반영되지 않아요. 방장이 시작하면 <b>30초 동안 문장을 입력해 타자 실력을 재고</b>, 팀을 자동으로 나눈 뒤 1라운드를 바로 시작해요. 인원이 적은 팀에는 인원수 비율만큼 보정 점수가 적용돼요.</p>
+        <p>${data?.playMode === 'tablet' ? '<b>타자 테스트 없이 모든 라운드를 터치 객관식으로 진행해요.</b> 보기 4개 중 한 번만 선택하세요. 정답은 60점에 8초 이내 빠르기에 따라 최대 40점 보너스, 오답은 팀 점수 30점 감점이에요. 정답 점수에는 라운드·인원 보정이 적용돼요.' : '위 연습은 점수에 반영되지 않아요. 방장이 시작하면 <b>30초 동안 문장을 입력해 타자 실력을 재고</b>, 팀을 자동으로 나눈 뒤 1라운드를 시작해요. 인원이 적은 팀에는 인원수 비율만큼 보정 점수가 적용돼요.'}</p>
       </div>
     </section>
   `;
@@ -574,6 +587,9 @@ function renderPlacementCard(data) {
 }
 
 function renderPracticeCard(data) {
+  if (data?.playMode === 'tablet') {
+    return `<section class="practice-card panel-card"><div class="section-kicker">TABLET QUIZ · 터치로만 경기</div><h2>보기 4개 중 정답을 터치해요</h2><p class="muted">빠른 정답은 보너스! 틀리면 우리 팀 점수가 30점 깎여요.</p><div class="round-strip">${(data.roundModes || []).map((mode, index) => `<span class="round-chip"><b>${index + 1}</b>${escapeHtml(mode.name)}</span>`).join('')}</div></section>`;
+  }
   const prompt = data?.prompt;
   if (!prompt?.word) {
     return '<section class="practice-card panel-card"><p class="muted">연습 낱말을 준비하고 있어요…</p></section>';
@@ -629,7 +645,7 @@ function renderTeamReveal(data) {
         <div class="section-kicker">MY TEAM</div>
         <div class="team-reveal-seal" aria-hidden="true">${myTeam === 'blue' ? '청' : '백'}</div>
         <h1>${escapeHtml(self?.name || '')}님은 <em>${teamName(myTeam)}</em>이에요!</h1>
-        <p>내 타자 속도 <b>분당 ${formatScore(self?.typingSpeed)}타</b> · 실력이 비슷하도록 팀을 나눴어요.</p>
+        <p>${data.playMode === 'tablet' ? '인원수가 비슷하도록 팀을 무작위로 나눴어요. 이제 터치로 정답을 골라요!' : `내 타자 속도 <b>분당 ${formatScore(self?.typingSpeed)}타</b> · 실력이 비슷하도록 팀을 나눴어요.`}</p>
         <div class="next-countdown">1라운드 시작까지 <span id="reveal-time">${getTimeLabel(data.teamRevealRemainingMs)}</span></div>
       </section>
       <div class="team-grid">
@@ -689,7 +705,7 @@ function renderArena(data) {
           </div>
           <span class="scene-team-tag scene-team-tag--white" aria-hidden="true">백팀 · ${data.counts.white}명</span>
         </div>
-        ${data.phase === 'roundIntro' ? `<div class="round-intro-overlay" role="status"><span>${data.roundNumber === 5 ? '결승' : `${data.roundNumber}라운드`} 시작 안내</span><h2>${escapeHtml(data.mode?.name || '')}</h2><p>${escapeHtml(roundGuides[data.mode?.id] || data.mode?.description || '')}</p><strong><span class="intro-time">${getTimeLabel(data.roundIntroRemainingMs)}</span> 뒤 시작!</strong></div>` : ''}
+        ${data.phase === 'roundIntro' ? `<div class="round-intro-overlay" role="status"><span>${data.roundNumber === 5 ? '결승' : `${data.roundNumber}라운드`} 시작 안내</span><h2>${escapeHtml(data.mode?.name || '')}</h2><p>${escapeHtml(data.playMode === 'tablet' ? `${data.mode?.description || ''} 정답 60점 + 속도 보너스 최대 40점, 오답 −30점!` : roundGuides[data.mode?.id] || data.mode?.description || '')}</p><strong><span class="intro-time">${getTimeLabel(data.roundIntroRemainingMs)}</span> 뒤 시작!</strong></div>` : ''}
         ${victoryTeam ? `<div class="victory-celebration victory-celebration--${victoryTeam}" role="status">${fireworks}<strong>${teamName(victoryTeam)} 승리! 🎉</strong></div>` : ''}
         <div class="scene-step-track" aria-hidden="true"><b>청</b>${Array.from({ length: maxSteps * 2 + 1 }, (_, index) => `<i class="rope-step ${index === maxSteps ? 'is-center' : ''} ${index === maxSteps + ropeStep ? 'is-current' : ''}" data-rope-tick="${index}"></i>`).join('')}<b>백</b></div>
         <div class="scene-position-label" aria-live="polite">${getRopeStepLabel(data)}</div>
@@ -736,11 +752,11 @@ async function toggleBgm() {
 
 function renderPrompt(data) {
   if (data.phase === 'roundIntro') {
-    return `<section class="prompt-card round-intro-card"><span class="round-badge">${data.roundNumber === 5 ? 'FINAL ROUND' : `ROUND ${data.roundNumber}`}</span><h2>${escapeHtml(data.mode?.name || '')}</h2><p>${escapeHtml(roundGuides[data.mode?.id] || data.mode?.description || '')}</p><div class="next-countdown"><span class="intro-time">${getTimeLabel(data.roundIntroRemainingMs)}</span> 뒤 시작해요!</div></section>`;
+    return `<section class="prompt-card round-intro-card"><span class="round-badge">${data.roundNumber === 5 ? 'FINAL ROUND' : `ROUND ${data.roundNumber}`}</span><h2>${escapeHtml(data.mode?.name || '')}</h2><p>${escapeHtml(data.playMode === 'tablet' ? `${data.mode?.description || ''} 정답 60점 + 속도 보너스 최대 40점, 오답 −30점!` : roundGuides[data.mode?.id] || data.mode?.description || '')}</p><div class="next-countdown"><span class="intro-time">${getTimeLabel(data.roundIntroRemainingMs)}</span> 뒤 시작해요!</div></section>`;
   }
   if (data.phase === 'wheel') {
     const selected = Number(data.wheelSelectedIndex ?? 0);
-    return `<section class="prompt-card wheel-card" style="--wheel-turns:${1440 - selected * 90}deg;--wheel-duration:${Math.round(Number(data.wheelDurationMs || 7000) * .65)}ms"><span class="round-badge">FINAL ROUND</span><h2>2:2 동점! 결승 종목 돌림판</h2><p>1~4라운드 중 하나를 다시 겨뤄 최종 승자를 정해요.</p><div class="wheel-wrap"><div class="wheel-pointer" aria-hidden="true"></div><div class="game-wheel"><span>말모이</span><span>뜻풀이</span><span>바른말</span><span>릴레이</span></div></div><p class="wheel-countdown">결승까지 <span id="wheel-time">${getTimeLabel(data.wheelRemainingMs)}</span></p><p class="wheel-result">선정 종목: <strong>${escapeHtml(modeLabels[roundModes[selected]?.id] || '')}</strong></p></section>`;
+    return `<section class="prompt-card wheel-card" style="--wheel-turns:${1440 - selected * 90}deg;--wheel-duration:${Math.round(Number(data.wheelDurationMs || 7000) * .65)}ms"><span class="round-badge">FINAL ROUND</span><h2>2:2 동점! 결승 종목 돌림판</h2><p>1~4라운드 중 하나를 다시 겨뤄 최종 승자를 정해요.</p><div class="wheel-wrap"><div class="wheel-pointer" aria-hidden="true"></div><div class="game-wheel">${data.playMode === 'tablet' ? '<span>순우리말</span><span>창제 원리</span><span>세종대왕</span><span>종합 퀴즈</span>' : '<span>말모이</span><span>뜻풀이</span><span>바른말</span><span>릴레이</span>'}</div></div><p class="wheel-countdown">결승까지 <span id="wheel-time">${getTimeLabel(data.wheelRemainingMs)}</span></p><p class="wheel-result">선정 종목: <strong>${escapeHtml(data.roundModes?.[selected]?.name || modeLabels[roundModes[selected]?.id] || '')}</strong></p></section>`;
   }
 
   if (data.phase === 'intermission') {
@@ -773,7 +789,7 @@ function renderPrompt(data) {
         ${prompt.category !== '순우리말' ? '<div class="history-ribbon">한글과 세종대왕 배움 카드</div>' : ''}
         <div class="meaning-question">${escapeHtml(prompt.meaning)}</div>
         <div class="choice-grid">${prompt.choices.map((choice, index) => `<button class="choice-button" data-choice="${escapeHtml(choice)}"><span>${String.fromCharCode(9312 + index)}</span>${escapeHtml(choice)}</button>`).join('')}</div>
-        <p class="prompt-note">정답은 점수를 얻고, 오답은 우리 팀 점수 30점 감점!</p>
+        <p class="prompt-note">정답 60점 + 속도 보너스 최대 40점 · 오답 −30점<br />8초 안에 빠르게 맞힐수록 보너스가 커져요. 정답 점수에 라운드·인원 보정이 적용돼요.</p>
       </section>
     `;
   }
@@ -816,7 +832,7 @@ function renderGame() {
       ${renderScoreboard(data)}
       ${renderArena(data)}
       <div id="prompt-root">${renderPrompt(data)}</div>
-      <div class="round-strip">${roundModes.map((mode, index) => `<span class="round-chip ${index === data.roundIndex ? 'is-active' : index < data.roundIndex ? 'is-done' : ''}"><b>${index + 1}</b>${modeLabels[mode.id]}${data.roundScores?.[index] ? ` · ${teamName(data.roundScores[index].winner)} 승` : ''}</span>`).join('')}<span class="round-chip round-chip--final ${finalRoundActive ? 'is-active' : ''} ${finalRoundPending ? 'is-optional' : ''}" title="1~4라운드가 2:2로 끝나면 열립니다"><b>5</b>돌림판 결승${finalRoundPending ? ' · 2:2일 때' : ''}</span></div>
+      <div class="round-strip">${(data.roundModes || roundModes).map((mode, index) => `<span class="round-chip ${index === data.roundIndex ? 'is-active' : index < data.roundIndex ? 'is-done' : ''}"><b>${index + 1}</b>${escapeHtml(mode.name || modeLabels[mode.id])}${data.roundScores?.[index] ? ` · ${teamName(data.roundScores[index].winner)} 승` : ''}</span>`).join('')}<span class="round-chip round-chip--final ${finalRoundActive ? 'is-active' : ''} ${finalRoundPending ? 'is-optional' : ''}" title="1~4라운드가 2:2로 끝나면 열립니다"><b>5</b>돌림판 결승${finalRoundPending ? ' · 2:2일 때' : ''}</span></div>
     </section>
   `;
 }
@@ -858,6 +874,9 @@ function render() {
 }
 
 function bindEvents() {
+  document.querySelectorAll('input[name="play-mode"]').forEach((input) => {
+    input.addEventListener('change', () => { state.selectedPlayMode = input.value; });
+  });
   document.querySelector('#bgm-toggle')?.addEventListener('click', toggleBgm);
   document.querySelector('#join-button')?.addEventListener('click', join);
   document.querySelector('#create-room-button')?.addEventListener('click', createRoom);

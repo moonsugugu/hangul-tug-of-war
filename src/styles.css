@@ -256,7 +256,17 @@ main { width: min(1180px, calc(100% - 36px)); margin: 0 auto 60px; }
 .prompt-note { margin: 12px 0 0; color: var(--muted); font-size: 11px; }
 .meaning-question, .repair-question, .relay-sentence { width: min(720px, 100%); margin: 20px auto; padding: 18px 20px; border-radius: 17px; background: #f8f4ed; font-size: clamp(17px, 3vw, 24px); line-height: 1.55; }
 .choice-grid { width: min(720px, 100%); display: grid; grid-template-columns: repeat(2, 1fr); gap: 9px; margin: 0 auto; }
-.choice-button { padding: 14px 9px; border: 1px solid #d9d0c6; border-radius: 13px; background: white; color: var(--ink); transition: .2s ease; }
+.choice-button { min-height: 80px; padding: 14px 9px; border: 1px solid #d9d0c6; border-radius: 13px; background: white; color: var(--ink); transition: .2s ease; touch-action: manipulation; }
+.choice-button:disabled { cursor: wait; opacity: .65; }
+.play-mode-picker { margin: 20px 0; padding: 12px; border: 1px solid #d9d0c6; border-radius: 14px; }
+.play-mode-picker legend { padding: 0 5px; font-weight: 700; font-size: 13px; }
+.play-mode-option { display: flex; align-items: center; gap: 10px; min-height: 64px; margin: 6px 0; padding: 10px; border: 1px solid #ded5ca; border-radius: 11px; cursor: pointer; }
+.play-mode-option:has(input:checked) { border-color: var(--blue); background: var(--blue-soft); }
+.play-mode-option input { width: 20px; height: 20px; flex-shrink: 0; accent-color: var(--blue); }
+.play-mode-option span { display: flex; flex-direction: column; gap: 5px; }
+.play-mode-option strong { font-size: 13px; }
+.play-mode-option small, .play-mode-picker p { font-size: 11px; color: var(--muted); line-height: 1.6; }
+.play-mode-picker p { margin: 10px 0 0; }
 .choice-button span { display: block; margin-bottom: 5px; color: var(--pink); font-family: 'Jua', sans-serif; font-size: 18px; }
 .choice-button:hover, .choice-button:focus-visible { border-color: var(--blue); background: var(--blue-soft); transform: translateY(-2px); outline: none; }
 .repair-question { text-decoration: line-through; text-decoration-color: var(--pink); }

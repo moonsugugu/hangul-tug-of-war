@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { WebSocket } from 'ws';
 import { REPAIR_PROMPTS } from '../server/spacing-prompts.js';
+import { WORD_QUIZ_PROMPTS, HANGUL_CREATION_QUIZ_PROMPTS } from '../server/quiz-prompts.js';
 
 const PORT = 18787;
 const repairAnswer = (prompt) => REPAIR_PROMPTS.find((item) => item.question === prompt.question).answer;
@@ -62,7 +63,9 @@ async function answerQuizCorrectly(client, initialState) {
     const overtimeCount = current.overtimeCount;
     const nextState = client.waitFor((state) => state.phase !== 'round' || state.prompt?.id !== promptId || state.overtimeCount !== overtimeCount, 8_000);
     const choiceResult = client.waitForMessage('choiceResult', 1_500);
-    client.send({ type: 'choice', choice: current.prompt.choices[0] });
+    const question = [...WORD_QUIZ_PROMPTS, ...HANGUL_CREATION_QUIZ_PROMPTS].find((entry) => entry.meaning === current.prompt.meaning && current.prompt.choices.includes(entry.answer));
+    assert.ok(question, '문제 은행에서 정답을 확인해야 해요');
+    client.send({ type: 'choice', choice: question.answer });
     try {
       if ((await choiceResult).correct) return;
     } catch {
