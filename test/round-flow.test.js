@@ -2,8 +2,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { WebSocket } from 'ws';
+import { REPAIR_PROMPTS } from '../server/spacing-prompts.js';
 
 const PORT = 18787;
+const repairAnswer = (prompt) => REPAIR_PROMPTS.find((item) => item.question === prompt.question).answer;
 
 function connect() {
   return new Promise((resolve, reject) => {
@@ -128,8 +130,8 @@ test('라운드별 승리, 10초 연장, 2:2 돌림판 결승', async (t) => {
   assert.equal(secondEnd.roundScores[1].winner, 'white');
   assert.equal(secondEnd.scores.blue, 0);
 
-  await blue.waitFor((state) => state.phase === 'round' && state.roundIndex === 2);
-  blue.send({ type: 'answer', answer: '한글날을 맞아 우리말을 사랑해요' });
+  const third = await blue.waitFor((state) => state.phase === 'round' && state.roundIndex === 2);
+  blue.send({ type: 'answer', answer: repairAnswer(third.prompt) });
   const thirdEnd = await blue.waitFor((state) => state.phase === 'intermission' && state.roundIndex === 2);
   assert.deepEqual(thirdEnd.roundWins, { blue: 2, white: 1 });
 
@@ -148,7 +150,7 @@ test('라운드별 승리, 10초 연장, 2:2 돌림판 결승', async (t) => {
   assert.equal(final.mode.id, ['word', 'quiz', 'repair', 'relay'][wheel.wheelSelectedIndex]);
   if (final.prompt.kind === 'word') blue.send({ type: 'answer', answer: final.prompt.word });
   if (final.prompt.kind === 'quiz') await answerQuizCorrectly(blue, final);
-  if (final.prompt.kind === 'repair') blue.send({ type: 'answer', answer: '한글날을 맞아 우리말을 사랑해요' });
+  if (final.prompt.kind === 'repair') blue.send({ type: 'answer', answer: repairAnswer(final.prompt) });
   if (final.prompt.kind === 'relay') {
     blue.send({ type: 'relayAnswer', answer: final.prompt.prompt, deadline: final.relay.deadline });
     white.send({ type: 'relayAnswer', answer: '오답', deadline: final.relay.deadline });
@@ -203,8 +205,8 @@ test('라운드별 승리, 10초 연장, 2:2 돌림판 결승', async (t) => {
   relayHost.send({ type: 'answer', answer: relayFirst.prompt.word });
   const relaySecond = await relayHost.waitFor((state) => state.phase === 'round' && state.roundIndex === 1);
   await answerQuizCorrectly(relayHost, relaySecond);
-  await relayHost.waitFor((state) => state.phase === 'round' && state.roundIndex === 2);
-  relayHost.send({ type: 'answer', answer: '한글날을 맞아 우리말을 사랑해요' });
+  const repairRound1 = await relayHost.waitFor((state) => state.phase === 'round' && state.roundIndex === 2);
+  relayHost.send({ type: 'answer', answer: repairAnswer(repairRound1.prompt) });
   const relayFourth = await relayHost.waitFor((state) => state.phase === 'round' && state.roundIndex === 3 && state.relay);
   const blueSupporter = relayFourth.players.find((player) => player.team === 'blue' && player.id !== relayFourth.relay.blueId);
   const whiteSupporter = relayFourth.players.find((player) => player.team === 'white' && player.id !== relayFourth.relay.whiteId);
@@ -239,8 +241,8 @@ test('라운드별 승리, 10초 연장, 2:2 돌림판 결승', async (t) => {
   relayHost.send({ type: 'answer', answer: idleFirst.prompt.word });
   const idleSecond = await relayHost.waitFor((state) => state.phase === 'round' && state.roundIndex === 1);
   await answerQuizCorrectly(relayHost, idleSecond);
-  await relayHost.waitFor((state) => state.phase === 'round' && state.roundIndex === 2);
-  relayHost.send({ type: 'answer', answer: '한글날을 맞아 우리말을 사랑해요' });
+  const repairRound2 = await relayHost.waitFor((state) => state.phase === 'round' && state.roundIndex === 2);
+  relayHost.send({ type: 'answer', answer: repairAnswer(repairRound2.prompt) });
   await relayHost.waitFor((state) => state.phase === 'round' && state.roundIndex === 3);
   const idleEnd = await relayHost.waitFor((state) => state.phase === 'results' && state.roundIndex === 3, 8_000);
   assert.equal(idleEnd.roundScores[3].reason, 'tiebreak');
@@ -257,7 +259,7 @@ test('라운드별 승리, 10초 연장, 2:2 돌림판 결승', async (t) => {
   const draftQuiz = await relayHost.waitFor((state) => state.phase === 'round' && state.roundIndex === 1);
   await answerQuizCorrectly(relayHost, draftQuiz);
   const draftRepair = await relayHost.waitFor((state) => state.phase === 'round' && state.roundIndex === 2);
-  relayHost.send({ type: 'draft', promptId: draftRepair.prompt.id, text: '한글날을 맞아' });
+  relayHost.send({ type: 'draft', promptId: draftRepair.prompt.id, text: draftRepair.prompt.question.slice(0, 4) });
   const repairEnd = await relayHost.waitFor((state) => state.phase === 'intermission' && state.roundIndex === 2);
   assert.ok(repairEnd.scores.blue > 0, '문장을 고치다 시간이 끝나도 부분 점수가 올라가요');
   const draftRelay = await relayHost.waitFor((state) => state.phase === 'round' && state.roundIndex === 3 && state.relay);

@@ -4,6 +4,7 @@ import { readFile, stat } from 'node:fs/promises';
 import { dirname, extname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
+import { REPAIR_PROMPTS } from './spacing-prompts.js';
 import { networkInterfaces } from 'node:os';
 import { WebSocketServer } from 'ws';
 
@@ -429,6 +430,11 @@ function currentQuizPrompt(progress) {
   return { id, prompt: { ...prompt, choices: progress.quizChoices } };
 }
 
+function currentRepairPrompt(progress) {
+  const index = deckIndex(progress, 'repair', REPAIR_PROMPTS.length, progress.promptIndex);
+  return { id: `repair-${progress.promptIndex}-${index}`, prompt: REPAIR_PROMPTS[index] };
+}
+
 function currentPlacementPrompt(progress) {
   const index = deckIndex(progress, 'placement', PLACEMENT_PROMPTS.length, progress.promptIndex);
   return { id: `placement-${progress.promptIndex}-${index}`, sentence: PLACEMENT_PROMPTS[index] };
@@ -473,74 +479,6 @@ function assignTeamsBySkill(players) {
     teams[team].total += player.typingSpeed;
   }
 }
-
-const REPAIR_PROMPTS = [
-  {
-    question: '한글 날을 맞아 우리말을 사랑해요',
-    answer: '한글날을 맞아 우리말을 사랑해요',
-    explanation: '기념일 이름인 한글날은 붙여 씁니다.',
-  },
-  {
-    question: '우리말을아끼고한글을사랑합시다',
-    answer: '우리말을 아끼고 한글을 사랑합시다',
-    explanation: '문장의 의미가 잘 드러나도록 낱말 사이를 띄어 씁니다.',
-  },
-  {
-    question: '세종대왕님감사합니다',
-    answer: '세종대왕님 감사합니다',
-    explanation: '부르는 말과 이어지는 말을 알맞게 띄어 씁니다.',
-  },
-  {
-    question: '한글은누구나쉽게배울수있는문자입니다.',
-    answer: '한글은 누구나 쉽게 배울 수 있는 문자입니다.',
-    explanation: '문장 속 낱말을 알맞게 띄어 씁니다.',
-  },
-  {
-    question: '훈민정음은백성을위해만들었습니다.',
-    answer: '훈민정음은 백성을 위해 만들었습니다.',
-    explanation: '조사와 낱말을 구분해 띄어 써야 합니다.',
-  },
-  {
-    question: '10월9일은한글날입니다.',
-    answer: '10월 9일은 한글날입니다.',
-    explanation: '날짜와 낱말 사이를 정확히 띄어 씁니다.',
-  },
-  {
-    question: '우리함께바른말을써요.',
-    answer: '우리 함께 바른말을 써요.',
-    explanation: '‘우리 함께’와 ‘바른말을 써요’를 알맞게 띄어 씁니다.',
-  },
-  {
-    question: '세종대왕은백성들이쉽게읽고쓰기를바랐습니다.',
-    answer: '세종대왕은 백성들이 쉽게 읽고 쓰기를 바랐습니다.',
-    explanation: '문장 속 낱말을 의미 단위에 맞게 띄어 씁니다.',
-  },
-  {
-    question: '한글은소중한우리문화유산입니다.',
-    answer: '한글은 소중한 우리 문화유산입니다.',
-    explanation: '‘우리 문화유산’처럼 낱말 사이를 띄어 씁니다.',
-  },
-  {
-    question: '뜻을알고쓰면우리말이더재미있어요.',
-    answer: '뜻을 알고 쓰면 우리말이 더 재미있어요.',
-    explanation: '말의 뜻을 생각하며 낱말 사이를 정확히 띄어 씁니다.',
-  },
-  {
-    question: '모두가읽고쓸수있는글자를만들었습니다.',
-    answer: '모두가 읽고 쓸 수 있는 글자를 만들었습니다.',
-    explanation: '‘쓸 수 있는’은 낱말 단위로 띄어 씁니다.',
-  },
-  {
-    question: '한글날에우리말도감을만들어보아요.',
-    answer: '한글날에 우리말 도감을 만들어 보아요.',
-    explanation: '‘만들어 보아요’처럼 보조 용언 앞을 띄어 씁니다.',
-  },
-  {
-    question: '우리말의아름다움을함께느껴요.',
-    answer: '우리말의 아름다움을 함께 느껴요.',
-    explanation: '조사와 낱말을 구분해 띄어 씁니다.',
-  },
-];
 
 const RELAY_PROMPTS = [
   '우리말을 아끼고 한글을 소중히 지켜요.',
@@ -750,9 +688,8 @@ function getPromptFor(room, player) {
   }
 
   if (mode.id === 'repair') {
-    const index = player.progress.promptIndex % REPAIR_PROMPTS.length;
-    const prompt = REPAIR_PROMPTS[index];
-    return { kind: 'repair', id: `repair-${index}`, question: prompt.question };
+    const { id, prompt } = currentRepairPrompt(player.progress);
+    return { kind: 'repair', id, question: prompt.question };
   }
 
   if (mode.id === 'relay' && game.relay) {
@@ -1154,7 +1091,7 @@ function settleRoundDrafts(room) {
     if (!draft || draft.kind !== mode || draft.promptId !== prompt?.id || !normalizeSentence(draft.text)) continue;
     const expected = mode === 'word'
       ? currentWordPrompt(player.progress).prompt.word
-      : REPAIR_PROMPTS[player.progress.promptIndex % REPAIR_PROMPTS.length].answer;
+      : currentRepairPrompt(player.progress).prompt.answer;
     const result = calculateTypedScore(draft.text, expected, Date.now() - player.progress.promptStartedAt, mode);
     awardTimeoutScore(room, player, result.score);
     player.progress.promptIndex += 1;
@@ -1235,7 +1172,7 @@ function handleTypedAnswer(player, answer) {
 
   const source = mode.id === 'word'
     ? currentWordPrompt(player.progress).prompt
-    : REPAIR_PROMPTS[player.progress.promptIndex % REPAIR_PROMPTS.length];
+    : currentRepairPrompt(player.progress).prompt;
   const expected = mode.id === 'word' ? source.word : source.answer;
   const elapsedMs = Date.now() - player.progress.promptStartedAt;
   const result = calculateTypedScore(answer, expected, elapsedMs, mode.id);
