@@ -1,3 +1,4 @@
+import { canSend, encodeMessage, stateDelta, takeMessageToken } from './transport.mjs';
 import { WORD_PROMPTS, WORD_QUIZ_PROMPTS, HANGUL_CREATION_QUIZ_PROMPTS } from './quiz-prompts.js';
 import { MAX_CSV_BYTES, validateCustomQuestions } from '../shared/question-csv.js';
 import { SCORE_MULTIPLIER_LEVELS, SCORE_SETTING_PHASES, ANSWER_REVIEW_MS } from '../shared/score-settings.js';
@@ -343,7 +344,7 @@ function getRoomBySocket(ws) {
 
 function getPlayerBySocket(ws) {
   const room = getRoomBySocket(ws);
-  return room ? [...room.players.values()].find((player) => player.ws === ws) : null;
+  return room?.players.get(ws.playerId) || null;
 }
 
 function getRoomForPlayer(player) {
@@ -466,7 +467,23 @@ function getPromptFor(room, player) {
   return null;
 }
 
-function publicStateFor(room, player) {
+function publicSelf(player) {
+  return player ? {
+    id: player.id,
+    name: player.name,
+    team: player.team,
+    characterId: player.characterId,
+    isHost: player.isHost,
+    spectator: player.spectator,
+    // Typing results stay private to each player; others only see teams.
+    practiceCount: player.practiceCount || 0,
+    placementKeystrokes: player.placementKeystrokes || 0,
+    typingSpeed: player.typingSpeed ?? null,
+  } : null;
+}
+
+function publicStateFor(room, player, common) {
+  if (common) return { ...common, self: publicSelf(player), prompt: getPromptFor(room, player) };
   const game = room.game;
   const counts = getCounts(room);
   const multipliers = getMultipliers(room);
@@ -522,18 +539,7 @@ function publicStateFor(room, player) {
     ropeMaxSteps: ROPE_MAX_STEPS,
     winner: game.winner,
     notice: game.notice,
-    self: player ? {
-      id: player.id,
-      name: player.name,
-      team: player.team,
-      characterId: player.characterId,
-      isHost: player.isHost,
-      spectator: player.spectator,
-      // Typing results stay private to each player; others only see teams.
-      practiceCount: player.practiceCount || 0,
-      placementKeystrokes: player.placementKeystrokes || 0,
-      typingSpeed: player.typingSpeed ?? null,
-    } : null,
+    self: publicSelf(player),
     players: [...room.players.values()].map((entry) => ({
       id: entry.id,
       name: entry.name,
@@ -558,18 +564,38 @@ function publicStateFor(room, player) {
   };
 }
 
-function send(ws, payload) {
-  if (ws && ws.readyState === ws.OPEN) ws.send(JSON.stringify(payload));
+function send(ws, payload, serialized) {
+  if (canSend(ws)) ws.send(serialized ? encodeMessage(payload, serialized) : JSON.stringify(payload));
+}
+
+function sendPlayerState(room, player, common, serialized) {
+  if (!canSend(player.ws)) return;
+  const state = publicStateFor(room, player, common);
+  const message = player.ws.supportsDelta ? stateDelta(player.ws, state, serialized) : state;
+  if (message) send(player.ws, message, serialized);
+}
+
+function broadcastPhase(room) {
+  const game = room.game;
+  return `${game.phase}:${game.roundIndex}:${game.relay?.deadline}:${Boolean(game.relay?.lastResult)}`;
+}
+
+function flushBroadcast(room) {
+  clearTimeout(room.broadcastTimer);
+  room.broadcastTimer = null;
+  if (rooms.get(room.id) !== room) return;
+  const common = publicStateFor(room, null);
+  const serialized = new Map();
+  for (const player of room.players.values()) sendPlayerState(room, player, common, serialized);
+  room.lastBroadcastAt = Date.now();
+  room.lastBroadcastPhase = broadcastPhase(room);
 }
 
 function broadcast(room) {
   if (!room || !rooms.has(room.id)) return;
-  for (const player of room.players.values()) {
-    send(player.ws, publicStateFor(room, player));
-  }
-  // 방마다 따로 기록한다. 전역 하나로 두면 한 반에서 답이 들어올 때마다 시각이 갱신돼
-  // 다른 반들의 0.5초 정기 갱신이 계속 밀린다(20개 반 동시 사용 시 최장 4초 멈춤 실측).
-  room.lastBroadcastAt = Date.now();
+  // 화면 단계와 릴레이 결과는 즉시 보존하고 점수·명단 갱신만 묶습니다.
+  if (room.lastBroadcastPhase !== broadcastPhase(room)) return flushBroadcast(room);
+  if (!room.broadcastTimer) room.broadcastTimer = setTimeout(() => flushBroadcast(room), 60);
 }
 
 function setNotice(room, text) {
@@ -587,7 +613,7 @@ function checkRopeWin(room) {
   if (room.sessionMode === 'waiting') return;
   // Relay keeps rotating representatives until its round timer expires.
   if (room.game.mode === 'relay') return;
-  const ropeStep = publicStateFor(room, null).ropeStep;
+  const ropeStep = Math.max(-ROPE_MAX_STEPS, Math.min(ROPE_MAX_STEPS, -Math.round((room.game.scores.blue - room.game.scores.white) / ROPE_POINTS_PER_STEP)));
   if (Math.abs(ropeStep) === ROPE_MAX_STEPS) finishRound(room, 'rope');
 }
 
@@ -1228,7 +1254,7 @@ function joinPlayer(ws, message) {
     send(ws, { type: 'error', message: room.sessionMode === 'ai' ? 'AI 1:1 경기 중인 방이에요. 학급 대기실로 돌아온 뒤 입장해 주세요.' : '게임이 이미 진행 중입니다. 다음 게임을 기다려 주세요.' });
     return;
   }
-  if (room.players.size >= MAX_PLAYERS_PER_ROOM) {
+  if ([...room.players.values()].filter((entry) => !entry.isHost && !entry.isAI).length >= MAX_PLAYERS_PER_ROOM) {
     send(ws, { type: 'error', message: '이 방은 최대 30명까지 참여할 수 있어요.' });
     return;
   }
@@ -1256,6 +1282,8 @@ function joinPlayer(ws, message) {
   room.players.set(player.id, player);
   applyHostParticipation(room, player);
   socketRooms.set(ws, roomId);
+  ws.playerId = player.id;
+  ws.sentState = null;
   send(ws, { type: 'joined', roomId, roomUrl: getRoomUrl(roomId), player: { id: player.id, name: player.name, team: player.team, characterId: player.characterId, isHost: player.isHost } });
   broadcast(room);
 }
@@ -1355,6 +1383,7 @@ function updateRoomQuestions(player, message) {
 }
 
 function handleMessage(ws, rawMessage) {
+  if (!takeMessageToken(ws)) return;
   let message;
   try {
     message = JSON.parse(rawMessage.toString());
@@ -1378,9 +1407,15 @@ function handleMessage(ws, rawMessage) {
   if (message.type === 'selectWaitingRound') return selectWaitingRound(player, message);
   if (message.type === 'start') return startGame(player);
   if (message.type === 'restart') return resetToLobby(player);
-  if (message.type === 'answer') return handleTypedAnswer(player, message.answer);
-  if (message.type === 'choice') return handleChoice(player, message.choice, message.promptId);
-  if (message.type === 'relayAnswer') return handleRelayAnswer(player, message.answer, message.deadline);
+  if (['answer', 'choice', 'relayAnswer'].includes(message.type)) {
+    if (message.type === 'answer') handleTypedAnswer(player, message.answer);
+    if (message.type === 'choice') handleChoice(player, message.choice, message.promptId);
+    if (message.type === 'relayAnswer') handleRelayAnswer(player, message.answer, message.deadline);
+    // 다음 문제는 답한 학생에게 즉시 보냅니다. 반 전체 방송을 기다리지 않습니다.
+    const room = getRoomForPlayer(player);
+    if (room) sendPlayerState(room, player);
+    return;
+  }
   if (message.type === 'draft') return handleDraft(player, message);
 }
 
@@ -1462,7 +1497,7 @@ async function serveStatic(req, res) {
       return;
     }
     const body = await readFile(target);
-    res.writeHead(200, { 'Content-Type': MIME_TYPES[extname(target)] || 'application/octet-stream' });
+    res.writeHead(200, { 'Content-Type': MIME_TYPES[extname(target)] || 'application/octet-stream', 'Cache-Control': target.startsWith(join(DIST, 'assets')) ? 'public, max-age=31536000, immutable' : 'no-cache' });
     res.end(body);
   } catch {
     if (STATIC_ROOT === DIST) {
@@ -1490,9 +1525,12 @@ const websocketServer = new WebSocketServer({
   server: httpServer,
   path: '/ws',
   maxPayload: MAX_CSV_BYTES + 8_192,
-  perMessageDeflate: process.env.WS_COMPRESS === '0' ? false : { zlibDeflateOptions: { level: 3 }, threshold: 1024 },
+  perMessageDeflate: process.env.WS_COMPRESS === '0' ? false : { zlibDeflateOptions: { level: 3, memLevel: 7 }, serverMaxWindowBits: 13, concurrencyLimit: 4, threshold: 512 },
 });
-websocketServer.on('connection', (ws) => {
+websocketServer.on('connection', (ws, request) => {
+  ws.supportsDelta = new URL(request.url, 'http://localhost').searchParams.get('delta') === '1';
+  ws.isAlive = true;
+  ws.on('pong', () => { ws.isAlive = true; });
   ws.on('error', () => ws.close());
   ws.on('message', (message) => handleMessage(ws, message));
   ws.on('close', () => {
@@ -1518,4 +1556,11 @@ httpServer.listen(PORT, '127.0.0.1', () => {
   console.log(`말모이 줄다리기 서버가 http://localhost:${PORT} 에서 실행 중입니다.`);
 });
 
-setInterval(tick, 250);
+setInterval(tick, 250).unref();
+setInterval(() => {
+  for (const ws of websocketServer.clients) {
+    if (!ws.isAlive) { ws.terminate(); continue; }
+    ws.isAlive = false;
+    ws.ping();
+  }
+}, 12_000).unref();

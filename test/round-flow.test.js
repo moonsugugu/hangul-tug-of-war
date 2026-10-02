@@ -294,23 +294,23 @@ test('라운드별 승리, 10초 연장, 2:2 돌림판 결승', async (t) => {
   assert.deepEqual(revealA.counts, { blue: 2, white: 2 });
   assert.equal(revealA.players.some((player) => 'typingSpeed' in player), false, '다른 사람의 타자 속도는 공개하지 않아요');
 
-  const crowdSockets = await Promise.all(Array.from({ length: 31 }, () => connect()));
+  const crowdSockets = await Promise.all(Array.from({ length: 32 }, () => connect()));
   t.after(() => crowdSockets.forEach((socket) => socket.close()));
   const crowdHost = watch(crowdSockets[0]);
   crowdHost.send({ type: 'createRoom', name: '30명 방장', characterId: 'bear' });
   const crowdLobby = await crowdHost.waitFor((state) => state.phase === 'lobby' && state.players.length === 1);
-  for (let index = 1; index < 30; index += 1) {
+  for (let index = 1; index <= 30; index += 1) {
     crowdSockets[index].send(JSON.stringify({ type: 'join', roomId: crowdLobby.roomId, name: `참가자${index}`, characterId: 'cat' }));
   }
-  const fullRoom = await crowdHost.waitFor((state) => state.players.length === 30);
+  const fullRoom = await crowdHost.waitFor((state) => state.players.length === 31);
   assert.equal(fullRoom.maxPlayers, 30);
-  assert.deepEqual(fullRoom.counts, { blue: 15, white: 15 });
+  assert.deepEqual(fullRoom.counts, { blue: 16, white: 15 });
   const rejection = new Promise((resolve) => {
-    crowdSockets[30].on('message', (raw) => {
+    crowdSockets[31].on('message', (raw) => {
       const message = JSON.parse(raw.toString());
       if (message.type === 'error') resolve(message);
     });
   });
-  crowdSockets[30].send(JSON.stringify({ type: 'join', roomId: crowdLobby.roomId, name: '31번째', characterId: 'cat' }));
+  crowdSockets[31].send(JSON.stringify({ type: 'join', roomId: crowdLobby.roomId, name: '31번째 학생', characterId: 'cat' }));
   assert.match((await rejection).message, /최대 30명/);
 });

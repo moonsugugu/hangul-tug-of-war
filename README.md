@@ -196,3 +196,7 @@ npm run dev
 
 **이 저장소 점검(2026-10-02):** 이미 규칙을 지키고 있습니다(압축 켜짐, 방마다 따로 0.5초 갱신, networkInterfaces 캐시).
 <!-- CODERULE:END -->
+
+## 추가 성능 점검 (2026-10-02)
+
+[수정 내용과 검증 결과](docs/performance-audit-2026-10-02.md). `node scripts/measure-load.mjs`로 로컬 전송량을 다시 측정할 수 있습니다.

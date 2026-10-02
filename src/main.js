@@ -144,7 +144,7 @@ function updateRoomUrl(roomId) {
 function connect() {
   const protocol = location.protocol === 'https:' ? 'wss' : 'ws';
   const host = location.port === '5173' ? `${location.hostname}:8787` : location.host;
-  socket = new WebSocket(`${protocol}://${host}/ws`);
+  socket = new WebSocket(`${protocol}://${host}/ws?delta=1`);
 
   socket.addEventListener('open', () => {
     state.connected = true;
@@ -158,7 +158,7 @@ function connect() {
     setTimeout(connect, 1500);
   });
   socket.addEventListener('message', (event) => {
-    const message = JSON.parse(event.data);
+    let message = JSON.parse(event.data);
     if (message.type === 'roomCreated') {
       state.roomId = normalizeRoomId(message.roomId);
       state.roomUrl = message.roomUrl || state.roomUrl;
@@ -176,6 +176,7 @@ function connect() {
       return;
     }
     if (message.type === 'state') {
+      message = message.full === false ? { ...state.data, ...message } : message;
       state.roomId = normalizeRoomId(message.roomId) || state.roomId;
       state.roomUrl = message.roomUrl || state.roomUrl;
       state.data = message;
