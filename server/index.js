@@ -19,6 +19,8 @@ import { networkInterfaces } from 'node:os';
 import { WebSocketServer } from 'ws';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+// 시작할 때 한 번만 읽어 각 서버의 실제 실행 버전을 확인한다.
+const APP_VERSION = JSON.parse(await readFile(join(ROOT, 'package.json'), 'utf8')).version;
 const DIST = join(ROOT, 'dist');
 const STATIC_ROOT = existsSync(DIST) ? DIST : ROOT;
 const PORT = Number(process.env.PORT || 8787);
@@ -1538,7 +1540,7 @@ async function serveStatic(req, res) {
   if (pathname === '/health' || SHARD_HEALTH_PATH.test(pathname)) {
     const playerCount = [...rooms.values()].reduce((total, room) => total + room.players.size, 0);
     res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
-    res.end(JSON.stringify({ ok: true, shard: SHARD_ID, shards: SHARD_COUNT, players: playerCount, rooms: rooms.size, load: loadGuard.status() }));
+    res.end(JSON.stringify({ ok: true, version: APP_VERSION, shard: SHARD_ID, shards: SHARD_COUNT, players: playerCount, rooms: rooms.size, load: loadGuard.status() }));
     return;
   }
 
@@ -1645,7 +1647,7 @@ websocketServer.on('connection', (ws, request) => {
 });
 
 httpServer.listen(PORT, '127.0.0.1', () => {
-  console.log(`말모이 줄다리기 서버가 http://localhost:${PORT} 에서 실행 중입니다.`);
+  console.log(`말모이 줄다리기 서버가 http://localhost:${httpServer.address().port} 에서 실행 중입니다.`);
 });
 
 setInterval(tick, 250).unref();

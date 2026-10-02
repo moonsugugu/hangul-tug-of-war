@@ -19,10 +19,24 @@ for (const [folder, game] of configs) {
   const learningAt = !threeD && !tug ? (await import(pathToFileURL(resolve(repo,'public/shared/learning.js')).href)).learningAt : null;
   try {
     await Promise.race([once(child.stdout, 'data'), pause(10000).then(() => { throw new Error('start timeout ' + errors); })]);
-    const base = `ws://127.0.0.1:${port}${threeD ? '/v1/game?game=' + game + '&delta=1' : '/ws?delta=1'}`;
+    const base = `ws://127.0.0.1:${port}${threeD ? '/v1/game?game=' + game + '&delta=1' : '/ws?delta=1' + (tug ? '&rows=2' : '')}`;
     async function connect(extra = '') {
       const ws = new WebSocket(base + extra, { perMessageDeflate: true }); ws.messages = []; ws.state = null;
-      ws.on('message', raw => { const m = JSON.parse(raw); ws.messages.push(m); if (m.type === 'quiz') ws.quiz=m; if (m.type === 'state') ws.state = threeD ? (m.full ? m : { ...ws.state, ...m }) : m.full === false ? { ...ws.state, ...m } : m; });
+      ws.on('message', raw => {
+        const m = JSON.parse(raw); ws.messages.push(m);
+        if (m.type === 'quiz') ws.quiz = m;
+        if (m.type !== 'state') return;
+        if (threeD) { ws.state = m.full ? m : { ...ws.state, ...m }; return; }
+        if (m.full !== false) { ws.state = m; return; }
+        const next = { ...ws.state, ...m };
+        if ((Array.isArray(m.pu) || Array.isArray(m.po) || Array.isArray(m.pf)) && Array.isArray(ws.state?.players)) {
+          next.players = Array.isArray(m.po) ? m.po.map(index => ws.state.players[index]) : ws.state.players.slice();
+          for (const [index, player] of m.pu || []) next.players[index] = player;
+          for (const [index, fields] of m.pf || []) if (next.players[index]) next.players[index] = { ...next.players[index], ...fields };
+        }
+        delete next.pu; delete next.po; delete next.pf;
+        ws.state = next;
+      });
       await once(ws,'open'); sockets.push(ws); return ws;
     }
     async function wait(ws, pred) { for (let i=0;i<150;i++) { const m=ws.messages.find(pred); if (m) return m; await pause(20); } throw new Error('message timeout '+game+' '+JSON.stringify(ws.messages.slice(-2))); }
