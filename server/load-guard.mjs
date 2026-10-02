@@ -5,7 +5,9 @@
 //   1 바쁨       — 방송 간격 2배. 하트비트로 연결을 끊지 않음(답이 늦은 건 서버가 바빠서일 수 있다)
 //   2 매우 바쁨  — 방송 간격 3배. 새 방 만들기만 안내 문구로 막는다(이미 수업 중인 반을 지킨다)
 // 올라갈 때는 바로, 내려갈 때는 5초 동안 조용해야 한 단계씩 내려간다(출렁임 방지).
-// 기준은 환경변수 LOAD_BUSY_MS(기본 80) · LOAD_OVER_MS(기본 200) 로 바꿀 수 있다. LOAD_GUARD=0 이면 끈다.
+// 켜진 뒤 20초는 재기만 하고 단계는 올리지 않는다(3D 서버는 시작할 때 지도 계산으로 몇 초 바쁘다).
+// /health 의 peak 는 최근 10분 동안 가장 높았던 단계다.
+// 기준은 환경변수 LOAD_BUSY_MS(기본 80) · LOAD_OVER_MS(기본 200) · LOAD_WARMUP_MS(기본 20000) 로 바꿀 수 있다. LOAD_GUARD=0 이면 끈다.
 // 이 파일은 앱마다 그대로 복사해 쓴다(원본: coderule/tools/load-guard.mjs).
 import { monitorEventLoopDelay } from 'node:perf_hooks';
 
@@ -17,6 +19,8 @@ export function createLoadGuard({
   overMs = Number(process.env.LOAD_OVER_MS) || 200,
   sampleMs = 1000,
   calmMs = 5000,
+  warmupMs = process.env.LOAD_WARMUP_MS !== undefined ? Number(process.env.LOAD_WARMUP_MS) : 20_000,
+  peakWindowMs = 10 * 60_000,
   enabled = process.env.LOAD_GUARD !== '0',
   now = () => Date.now(),
 } = {}) {
@@ -25,12 +29,15 @@ export function createLoadGuard({
   let calmSince = now();
   let busySince = null;
   let peakLevel = 0;
+  let peakAt = now();
+  const startedAt = now();
   let refusedRooms = 0;
   let sparedSockets = 0;
 
   function update(p99Ms) {
     lagMs = p99Ms;
     if (!enabled) { level = 0; return level; }
+    if (now() - startedAt < warmupMs) return level; // 시작 직후는 단계에 넣지 않는다
     const target = p99Ms >= overMs ? 2 : p99Ms >= busyMs ? 1 : 0;
     const t = now();
     if (target >= level) {
@@ -42,7 +49,8 @@ export function createLoadGuard({
       calmSince = t;
       if (level === 0) busySince = null;
     }
-    peakLevel = Math.max(peakLevel, level);
+    if (level >= peakLevel) { peakLevel = level; peakAt = t; }
+    else if (t - peakAt > peakWindowMs) { peakLevel = level; peakAt = t; }
     return level;
   }
 
