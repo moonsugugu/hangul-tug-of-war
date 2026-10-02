@@ -49,6 +49,19 @@ let pendingDraftReset = false;
 let wrongAnswerTimer;
 let resultToastTimer;
 
+function mergeState(base, msg) {
+  if (msg.full !== false) return msg;
+  const next = { ...base, ...msg };
+  // po: 순서가 바뀌면 새 자리마다 이전 번호. pu: 바뀐 학생 줄만 [번호, 항목]. 지난 명단에 순서대로 적용한다.
+  if ((Array.isArray(msg.pu) || Array.isArray(msg.po)) && Array.isArray(base?.players)) {
+    next.players = Array.isArray(msg.po) ? msg.po.map((from) => base.players[from]) : base.players.slice();
+    for (const [index, player] of msg.pu || []) next.players[index] = player;
+  }
+  delete next.pu;
+  delete next.po;
+  return next;
+}
+
 function renderWhenReady(kind) {
   if (isComposing) {
     pendingRender = kind === 'full' ? 'full' : pendingRender || kind;
@@ -153,7 +166,7 @@ function connect() {
   const protocol = location.protocol === 'https:' ? 'wss' : 'ws';
   const host = location.port === '5173' ? `${location.hostname}:8787` : location.host;
   clearTimeout(reconnectTimer);
-  socket = new WebSocket(`${protocol}://${host}/ws?delta=1`);
+  socket = new WebSocket(`${protocol}://${host}/ws?delta=1&rows=1`);
   const currentSocket = socket;
 
   socket.addEventListener('open', () => {
@@ -209,7 +222,7 @@ function connect() {
       return;
     }
     if (message.type === 'state') {
-      message = message.full === false ? { ...state.data, ...message } : message;
+      message = mergeState(state.data, message);
       state.roomId = normalizeRoomId(message.roomId) || state.roomId;
       state.roomUrl = message.roomUrl || state.roomUrl;
       state.data = message;

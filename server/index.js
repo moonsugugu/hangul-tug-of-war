@@ -1594,10 +1594,14 @@ const websocketServer = new WebSocketServer({
   server: httpServer,
   path: '/ws',
   maxPayload: MAX_CSV_BYTES + 8_192,
-  perMessageDeflate: process.env.WS_COMPRESS === '0' ? false : { zlibDeflateOptions: { level: 3, memLevel: 7 }, serverMaxWindowBits: 13, concurrencyLimit: 4, threshold: 512 },
+  // 압축은 기본으로 끈다(2026-10-02). 바뀐 학생 줄만 보내면 메시지가 작아 압축 이득보다 비용(메시지마다 압축,
+  // 학생 메시지 풀기)이 크다. 서버 노트북 실측으로 반당 CPU가 약 절반이 됐다. WS_COMPRESS=1 이면 다시 켠다.
+  perMessageDeflate: process.env.WS_COMPRESS === '1' ? { zlibDeflateOptions: { level: 3, memLevel: 7 }, serverMaxWindowBits: 13, concurrencyLimit: 4, threshold: 512 } : false,
 });
 websocketServer.on('connection', (ws, request) => {
   ws.supportsDelta = new URL(request.url, 'http://localhost').searchParams.get('delta') === '1';
+  // 바뀐 학생 줄만 받아 합칠 줄 아는 새 화면(pu). 예전 화면은 players 전체를 받는다.
+  ws.supportsRowPatch = new URL(request.url, 'http://localhost').searchParams.get('rows') === '1';
   ws.isAlive = true;
   ws.on('pong', () => { ws.isAlive = true; });
   ws.on('error', () => ws.close());
