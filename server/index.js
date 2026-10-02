@@ -1,4 +1,8 @@
 import { canSend, encodeMessage, stateDelta, takeMessageToken } from './transport.mjs';
+import { BUSY_MESSAGE, createLoadGuard } from './load-guard.mjs';
+
+// 과부하 보호(coderule 규칙 19): 서버가 바쁘면 점수·명단 방송을 늦추고, 끊지 않고, 매우 바쁠 때만 새 방을 막는다.
+const loadGuard = createLoadGuard();
 import { WORD_PROMPTS, WORD_QUIZ_PROMPTS, HANGUL_CREATION_QUIZ_PROMPTS } from './quiz-prompts.js';
 import { MAX_CSV_BYTES, validateCustomQuestions } from '../shared/question-csv.js';
 import { SCORE_MULTIPLIER_LEVELS, SCORE_SETTING_PHASES, ANSWER_REVIEW_MS } from '../shared/score-settings.js';
@@ -611,7 +615,7 @@ function broadcast(room) {
   if (!room || !rooms.has(room.id) || room.emptySince !== null) return;
   // 화면 단계와 릴레이 결과는 즉시 보존하고 점수·명단 갱신만 묶습니다.
   if (room.lastBroadcastPhase !== broadcastPhase(room)) return flushBroadcast(room);
-  if (!room.broadcastTimer) room.broadcastTimer = setTimeout(() => flushBroadcast(room), 60);
+  if (!room.broadcastTimer) room.broadcastTimer = setTimeout(() => flushBroadcast(room), loadGuard.interval(60));
 }
 
 function setNotice(room, text) {
@@ -1465,7 +1469,10 @@ function handleMessage(ws, rawMessage) {
 
   if (!message || typeof message !== 'object' || Array.isArray(message)) return;
 
-  if (message.type === 'createRoom') return createRoomAndJoin(ws, message);
+  if (message.type === 'createRoom') {
+    if (!loadGuard.canCreateRoom()) return send(ws, { type: 'error', code: 'server_busy', message: BUSY_MESSAGE });
+    return createRoomAndJoin(ws, message);
+  }
   if (message.type === 'join') return joinPlayer(ws, message);
   if (message.type === 'resume') return resumePlayer(ws, message);
   if (message.type === 'leave') return leavePlayer(ws);
@@ -1531,7 +1538,7 @@ async function serveStatic(req, res) {
   if (pathname === '/health' || SHARD_HEALTH_PATH.test(pathname)) {
     const playerCount = [...rooms.values()].reduce((total, room) => total + room.players.size, 0);
     res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
-    res.end(JSON.stringify({ ok: true, shard: SHARD_ID, shards: SHARD_COUNT, players: playerCount, rooms: rooms.size }));
+    res.end(JSON.stringify({ ok: true, shard: SHARD_ID, shards: SHARD_COUNT, players: playerCount, rooms: rooms.size, load: loadGuard.status() }));
     return;
   }
 
@@ -1643,7 +1650,7 @@ httpServer.listen(PORT, '127.0.0.1', () => {
 setInterval(tick, 250).unref();
 setInterval(() => {
   for (const ws of websocketServer.clients) {
-    if (!ws.isAlive) { ws.terminate(); continue; }
+    if (loadGuard.shouldTerminate(ws)) { ws.terminate(); continue; }
     ws.isAlive = false;
     ws.ping();
   }
