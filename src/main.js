@@ -162,17 +162,64 @@ function updateRoomUrl(roomId) {
   window.history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`);
 }
 
+// 서버 나누기: 방 코드 첫 글자가 서버 번호(2→1, 3→2, 4→3). 서버가 하나뿐이어도 그 서버가 /ws/s1~s8 을 모두 받는다.
+const SHARD_PREFIX = '23456789';
+let currentShard = 0;
+let pendingMessage = null;
+
+function shardFromRoom(roomId) {
+  const index = SHARD_PREFIX.indexOf(String(roomId || '')[0]);
+  return index >= 0 ? index + 1 : 0;
+}
+
+async function readHealth(path) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 2500);
+  try {
+    const response = await fetch(path, { cache: 'no-store', signal: controller.signal });
+    return response.ok ? await response.json() : null;
+  } catch { return null; } finally { clearTimeout(timer); }
+}
+
+/** 새 방을 열 서버: 서버가 여럿이면 접속자가 가장 적은 서버, 하나뿐이거나 확인이 안 되면 0(기본 주소). */
+async function pickShard() {
+  const main = await readHealth('/health');
+  const count = Math.min(8, Math.max(1, Math.floor(Number(main?.shards) || 1)));
+  if (count <= 1) return 0;
+  const results = await Promise.all(Array.from({ length: count }, (_, index) => readHealth(`/ws/s${index + 1}/health`)));
+  let best = 0;
+  let bestLoad = Infinity;
+  results.forEach((health, index) => {
+    if (!health?.ok) return;
+    const load = (Number(health.players) || 0) * 1000 + (Number(health.rooms) || 0);
+    if (load < bestLoad) { best = index + 1; bestLoad = load; }
+  });
+  return best;
+}
+
+/** 방이 있는 서버로 보낸다. 지금 연결이 다른 서버면 그 서버로 다시 연결한 뒤 보낸다. */
+function sendOnShard(shard, message) {
+  if (shard === currentShard && socket?.readyState === WebSocket.OPEN) { send(message); return; }
+  pendingMessage = message;
+  if (shard === currentShard) return; // 같은 서버에 연결하는 중이면 열리자마자 보낸다
+  currentShard = shard;
+  const previous = socket;
+  connect();
+  previous?.close();
+}
+
 function connect() {
   const protocol = location.protocol === 'https:' ? 'wss' : 'ws';
   const host = location.port === '5173' ? `${location.hostname}:8787` : location.host;
   clearTimeout(reconnectTimer);
-  socket = new WebSocket(`${protocol}://${host}/ws?delta=1&rows=1`);
+  socket = new WebSocket(`${protocol}://${host}/ws${currentShard ? `/s${currentShard}` : ''}?delta=1&rows=1`);
   const currentSocket = socket;
 
   socket.addEventListener('open', () => {
     if (socket !== currentSocket) return;
     state.connected = true;
-    if (resumeToken && state.roomId) send({ type: 'resume', roomId: state.roomId, token: resumeToken });
+    if (pendingMessage) { const message = pendingMessage; pendingMessage = null; send(message); }
+    else if (resumeToken && state.roomId) send({ type: 'resume', roomId: state.roomId, token: resumeToken });
     render();
   });
   socket.addEventListener('close', (event) => {
@@ -369,8 +416,9 @@ function join() {
     return;
   }
   const session = loadSession(state.roomId);
-  if (session) { resumeToken = session.token; send({ type: 'resume', roomId: state.roomId, token: resumeToken }); }
-  else send({ type: 'join', roomId: state.roomId, name, characterId: state.selectedCharacter });
+  const shard = shardFromRoom(state.roomId);
+  if (session) { resumeToken = session.token; sendOnShard(shard, { type: 'resume', roomId: state.roomId, token: resumeToken }); }
+  else sendOnShard(shard, { type: 'join', roomId: state.roomId, name, characterId: state.selectedCharacter });
 }
 
 function createRoom() {
@@ -381,7 +429,9 @@ function createRoom() {
     input?.focus();
     return;
   }
-  send({ type: 'createRoom', name, characterId: state.selectedCharacter, playMode: state.selectedPlayMode, hostParticipation: 'observe' });
+  const message = { type: 'createRoom', name, characterId: state.selectedCharacter, playMode: state.selectedPlayMode, hostParticipation: 'observe' };
+  // 서버가 여러 개면 가장 한가한 서버에 방을 만든다(선생님이 고를 필요 없음).
+  pickShard().then((shard) => sendOnShard(shard, message));
 }
 
 function joinByRoomCode() {
@@ -1357,5 +1407,7 @@ function renderResultToast() {
 document.addEventListener('pointerdown', () => { void unlockSoundEffects(); }, { once: true });
 document.addEventListener('keydown', () => { void unlockSoundEffects(); }, { once: true });
 
+// 주소에 방 코드가 있으면(QR 입장·새로고침) 처음부터 그 방의 서버로 연결한다.
+currentShard = shardFromRoom(state.roomId);
 connect();
 render();

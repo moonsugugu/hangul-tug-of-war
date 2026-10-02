@@ -18,6 +18,13 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const DIST = join(ROOT, 'dist');
 const STATIC_ROOT = existsSync(DIST) ? DIST : ROOT;
 const PORT = Number(process.env.PORT || 8787);
+// 서버 나누기: 같은 서버를 여러 개(포트만 다르게) 띄우고 방을 나눠 맡긴다. 노드는 메인 스레드 하나라 한 서버는 약 30~35개 반이 한계다.
+// SHARD_COUNT 가 없으면 지금처럼 서버 하나로 돈다. 방 코드 첫 글자 = 서버 번호(서버 1·2·3 → 2·3·4).
+const SHARD_COUNT = Math.min(8, Math.max(1, Math.floor(Number(process.env.SHARD_COUNT) || 1)));
+const SHARD_ID = Math.min(SHARD_COUNT, Math.max(1, Math.floor(Number(process.env.SHARD_ID) || 1)));
+const SHARD_PREFIX = '23456789';
+const WS_PATH = /^\/ws(?:\/s[1-8])?$/;
+const SHARD_HEALTH_PATH = /^\/ws\/s[1-8]\/health$/;
 const PUBLIC_BASE_URL = String(process.env.PUBLIC_BASE_URL || '').replace(/\/+$/, '');
 const REFERENCE_CPM = 120;
 const RELAY_LIMIT_MS = 12_000;
@@ -292,6 +299,8 @@ function createRoomId() {
   let roomId = '';
   do {
     roomId = Array.from({ length: 6 }, () => alphabet[Math.floor(Math.random() * alphabet.length)]).join('');
+    // 서버가 여러 개면 첫 글자를 서버 번호로 바꿔, 학생 화면이 코드만 보고 같은 서버로 찾아가게 한다.
+    if (SHARD_COUNT > 1) roomId = SHARD_PREFIX[SHARD_ID - 1] + roomId.slice(1);
   } while (rooms.has(roomId));
   return roomId;
 }
@@ -1518,10 +1527,11 @@ function tick() {
 
 async function serveStatic(req, res) {
   const pathname = decodeURIComponent((req.url || '/').split('?')[0]);
-  if (pathname === '/health') {
+  // /ws/s2/health 처럼 서버별 주소로도 상태를 알려 준다(선생님 화면이 가장 한가한 서버를 고를 때 쓴다).
+  if (pathname === '/health' || SHARD_HEALTH_PATH.test(pathname)) {
     const playerCount = [...rooms.values()].reduce((total, room) => total + room.players.size, 0);
-    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-    res.end(JSON.stringify({ ok: true, players: playerCount, rooms: rooms.size }));
+    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+    res.end(JSON.stringify({ ok: true, shard: SHARD_ID, shards: SHARD_COUNT, players: playerCount, rooms: rooms.size }));
     return;
   }
 
@@ -1591,13 +1601,20 @@ const httpServer = createServer((req, res) => {
 // 20개 반 600명 실측: 전송량 161Mbps → 3Mbps. 대신 서버 CPU 약 2배, 메모리 약 +330MB.
 // 브라우저는 permessage-deflate 를 기본 지원해 클라이언트 수정이 필요 없다. WS_COMPRESS=0 으로 끌 수 있다.
 const websocketServer = new WebSocketServer({
-  server: httpServer,
-  path: '/ws',
+  // /ws 와 서버별 /ws/s1~s8 을 모두 받으려고 업그레이드를 직접 처리한다(아래 httpServer.on('upgrade')).
+  noServer: true,
   maxPayload: MAX_CSV_BYTES + 8_192,
   // 압축은 기본으로 끈다(2026-10-02). 바뀐 학생 줄만 보내면 메시지가 작아 압축 이득보다 비용(메시지마다 압축,
   // 학생 메시지 풀기)이 크다. 서버 노트북 실측으로 반당 CPU가 약 절반이 됐다. WS_COMPRESS=1 이면 다시 켠다.
   perMessageDeflate: process.env.WS_COMPRESS === '1' ? { zlibDeflateOptions: { level: 3, memLevel: 7 }, serverMaxWindowBits: 13, concurrencyLimit: 4, threshold: 512 } : false,
 });
+httpServer.on('upgrade', (request, socket, head) => {
+  let pathname;
+  try { pathname = new URL(request.url || '/', 'http://localhost').pathname; } catch { socket.destroy(); return; }
+  if (!WS_PATH.test(pathname)) { socket.destroy(); return; }
+  websocketServer.handleUpgrade(request, socket, head, (ws) => websocketServer.emit('connection', ws, request));
+});
+
 websocketServer.on('connection', (ws, request) => {
   ws.supportsDelta = new URL(request.url, 'http://localhost').searchParams.get('delta') === '1';
   // 바뀐 학생 줄만 받아 합칠 줄 아는 새 화면(pu). 예전 화면은 players 전체를 받는다.
