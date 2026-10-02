@@ -20,12 +20,12 @@ const check = (name, pass, extra = '') => { if (!pass) failed += 1; console.log(
 function mergeState(base, msg) {
   if (msg.full !== false) return msg;
   const next = { ...base, ...msg };
-  if ((Array.isArray(msg.pu) || Array.isArray(msg.po)) && Array.isArray(base?.players)) { next.players = Array.isArray(msg.po) ? msg.po.map((f) => base.players[f]) : base.players.slice(); for (const [i, p] of msg.pu || []) next.players[i] = p; }
-  delete next.pu; delete next.po;
+  if ((Array.isArray(msg.pu) || Array.isArray(msg.po) || Array.isArray(msg.pf)) && Array.isArray(base?.players)) { next.players = Array.isArray(msg.po) ? msg.po.map((f) => base.players[f]) : base.players.slice(); for (const [i, p] of msg.pu || []) next.players[i] = p; for (const [i, fields] of msg.pf || []) if (next.players[i]) next.players[i] = { ...next.players[i], ...fields }; }
+  delete next.pu; delete next.po; delete next.pf;
   return next;
 }
 async function connect(rows) {
-  const ws = new WebSocket(`ws://127.0.0.1:${port}/ws?delta=1${rows ? '&rows=1' : ''}`, { perMessageDeflate: true });
+  const ws = new WebSocket(`ws://127.0.0.1:${port}/ws?delta=1${rows ? '&rows=' + (process.env.ROWS || '1') : ''}`, { perMessageDeflate: true });
   ws.m = []; ws.state = null; ws.pu = 0; ws.full = 0; ws.playersMsgs = 0; ws.bytes = 0;
   ws.on('message', (raw) => {
     const m = JSON.parse(raw); ws.m.push(m);

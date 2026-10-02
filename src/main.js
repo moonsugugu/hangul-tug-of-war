@@ -55,12 +55,15 @@ function mergeState(base, msg) {
   if (msg.full !== false) return msg;
   const next = { ...base, ...msg };
   // po: 순서가 바뀌면 새 자리마다 이전 번호. pu: 바뀐 학생 줄만 [번호, 항목]. 지난 명단에 순서대로 적용한다.
-  if ((Array.isArray(msg.pu) || Array.isArray(msg.po)) && Array.isArray(base?.players)) {
+  if ((Array.isArray(msg.pu) || Array.isArray(msg.po) || Array.isArray(msg.pf)) && Array.isArray(base?.players)) {
     next.players = Array.isArray(msg.po) ? msg.po.map((from) => base.players[from]) : base.players.slice();
     for (const [index, player] of msg.pu || []) next.players[index] = player;
+    // pf: 바뀐 칸만 [번호, {칸: 값}]. 그 학생 줄에 덮어쓴다.
+    for (const [index, fields] of msg.pf || []) if (next.players[index]) next.players[index] = { ...next.players[index], ...fields };
   }
   delete next.pu;
   delete next.po;
+  delete next.pf;
   return next;
 }
 
@@ -214,7 +217,7 @@ function connect() {
   const protocol = location.protocol === 'https:' ? 'wss' : 'ws';
   const host = location.port === '5173' ? `${location.hostname}:8787` : location.host;
   clearTimeout(reconnectTimer);
-  socket = new WebSocket(`${protocol}://${host}/ws${currentShard ? `/s${currentShard}` : ''}?delta=1&rows=1`);
+  socket = new WebSocket(`${protocol}://${host}/ws${currentShard ? `/s${currentShard}` : ''}?delta=1&rows=2`);
   const currentSocket = socket;
 
   socket.addEventListener('open', () => {

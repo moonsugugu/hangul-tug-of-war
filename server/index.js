@@ -1625,7 +1625,8 @@ httpServer.on('upgrade', (request, socket, head) => {
 websocketServer.on('connection', (ws, request) => {
   ws.supportsDelta = new URL(request.url, 'http://localhost').searchParams.get('delta') === '1';
   // 바뀐 학생 줄만 받아 합칠 줄 아는 새 화면(pu). 예전 화면은 players 전체를 받는다.
-  ws.supportsRowPatch = new URL(request.url, 'http://localhost').searchParams.get('rows') === '1';
+  ws.supportsRowPatch = ['1', '2'].includes(new URL(request.url, 'http://localhost').searchParams.get('rows'));
+  ws.supportsFieldPatch = new URL(request.url, 'http://localhost').searchParams.get('rows') === '2'; // 바뀐 칸만(pf) 받는 화면
   ws.isAlive = true;
   ws.on('pong', () => { ws.isAlive = true; });
   ws.on('error', () => ws.close());
