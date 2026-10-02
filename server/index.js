@@ -35,6 +35,7 @@ const TEAM_REVEAL_MS = Number(process.env.TEAM_REVEAL_MS || 7_000);
 const ROPE_MAX_STEPS = 20;
 const ROPE_POINTS_PER_STEP = 75;
 const MAX_PLAYERS_PER_ROOM = 30;
+const MAX_ROOMS = Math.max(1, Math.min(2000, Math.floor(Number(process.env.MAX_ROOMS) || 400)));
 const CHARACTER_IDS = ['rabbit', 'bear', 'cat', 'chick', 'panda', 'sheep', 'fox', 'penguin'];
 
 function shuffledIndexes(length, avoidFirst) {
@@ -308,6 +309,8 @@ function createRoom(playMode = 'typing', hostParticipation = 'auto') {
     questionRevision: 0,
     game: createGame(),
     players: new Map(),
+    playerTokens: new Map(),
+    emptySince: null,
     createdAt: Date.now(),
   };
   rooms.set(room.id, room);
@@ -353,6 +356,10 @@ function getRoomForPlayer(player) {
 
 function getActivePlayers(room) {
   return [...room.players.values()].filter((player) => !player.spectator);
+}
+
+function getAvailablePlayers(room) {
+  return getActivePlayers(room).filter((player) => player.isAI || player.ws?.readyState === 1);
 }
 
 function getHostTeam(room) {
@@ -548,7 +555,7 @@ function publicStateFor(room, player, common) {
       isHost: entry.isHost,
       spectator: entry.spectator,
       isAI: Boolean(entry.isAI),
-      connected: Boolean(entry.isAI || entry.ws?.readyState === entry.ws?.OPEN),
+      connected: Boolean(entry.isAI || entry.ws?.readyState === 1),
       scoreCount: entry.scoreCount || 0,
     })),
     prompt: getPromptFor(room, player),
@@ -592,7 +599,7 @@ function flushBroadcast(room) {
 }
 
 function broadcast(room) {
-  if (!room || !rooms.has(room.id)) return;
+  if (!room || !rooms.has(room.id) || room.emptySince !== null) return;
   // 화면 단계와 릴레이 결과는 즉시 보존하고 점수·명단 갱신만 묶습니다.
   if (room.lastBroadcastPhase !== broadcastPhase(room)) return flushBroadcast(room);
   if (!room.broadcastTimer) room.broadcastTimer = setTimeout(() => flushBroadcast(room), 60);
@@ -806,8 +813,8 @@ function startRelayDuel(room) {
   const game = room.game;
   if (game.phase !== 'round' || game.mode !== 'relay' || Date.now() >= game.roundEndsAt) return;
   const byTeam = {
-    blue: getActivePlayers(room).filter((player) => player.team === 'blue'),
-    white: getActivePlayers(room).filter((player) => player.team === 'white'),
+    blue: getAvailablePlayers(room).filter((player) => player.team === 'blue'),
+    white: getAvailablePlayers(room).filter((player) => player.team === 'white'),
   };
   if (!byTeam.blue.length || (!byTeam.white.length && room.sessionMode !== 'waiting')) return;
   for (const player of getActivePlayers(room)) player.roundDraft = null;
@@ -1102,7 +1109,7 @@ function handleRelayAnswer(player, answer, deadline) {
     addRelayScore(room, player.team, score);
   }
   if (game.phase !== 'round') return;
-  if (getActivePlayers(room).every((entry) => relay.submissions[entry.id])) finishRelayDuel(room);
+  if (getAvailablePlayers(room).every((entry) => relay.submissions[entry.id])) finishRelayDuel(room);
   else broadcast(room);
 }
 
@@ -1135,11 +1142,11 @@ function startGame(player) {
   const game = room.game;
   if (!player.isHost) return;
   if (room.sessionMode === 'waiting') {
-    const classCount = [...room.players.values()].filter((entry) => !entry.isAI && (!entry.isHost || room.hostParticipation !== 'observe')).length;
+    const classCount = [...room.players.values()].filter((entry) => !entry.isAI && entry.ws?.readyState === 1 && (!entry.isHost || room.hostParticipation !== 'observe')).length;
     if (classCount < 2) return send(player.ws, { type: 'error', message: '본 경기에 참가할 사람이 두 명 이상 모여야 해요. 학생 입장을 조금 더 기다려 주세요.' });
     resetRoomToLobby(room);
   } else if (game.phase !== 'lobby') return;
-  if (getActivePlayers(room).length < 2) {
+  if (getAvailablePlayers(room).length < 2) {
     send(player.ws, { type: 'error', message: '경기에 참가하는 사람이 두 명 이상 있어야 시작할 수 있어요. 진행만 하는 선생님은 참가 인원에서 제외해요.' });
     return;
   }
@@ -1250,8 +1257,8 @@ function joinPlayer(ws, message) {
   }
 
   const game = room.game;
-  if (game.phase !== 'lobby' && room.sessionMode !== 'waiting') {
-    send(ws, { type: 'error', message: room.sessionMode === 'ai' ? 'AI 1:1 경기 중인 방이에요. 학급 대기실로 돌아온 뒤 입장해 주세요.' : '게임이 이미 진행 중입니다. 다음 게임을 기다려 주세요.' });
+  if (room.sessionMode === 'ai' || game.phase === 'results') {
+    send(ws, { type: 'error', message: room.sessionMode === 'ai' ? 'AI 1:1 경기 중인 방이에요. 학급 대기실로 돌아온 뒤 입장해 주세요.' : '경기가 끝났어요. 선생님이 대기실로 돌아온 뒤 입장해 주세요.' });
     return;
   }
   if ([...room.players.values()].filter((entry) => !entry.isHost && !entry.isAI).length >= MAX_PLAYERS_PER_ROOM) {
@@ -1269,6 +1276,7 @@ function joinPlayer(ws, message) {
   const team = counts.blue <= counts.white ? 'blue' : 'white';
   const player = {
     id: randomUUID(),
+    token: randomUUID() + randomUUID(),
     roomId,
     ws,
     name,
@@ -1281,10 +1289,63 @@ function joinPlayer(ws, message) {
   };
   room.players.set(player.id, player);
   applyHostParticipation(room, player);
-  socketRooms.set(ws, roomId);
+  room.playerTokens.set(player.token, player.id);
+  if (!player.spectator && game.phase !== 'lobby' && game.rosterCounts.blue + game.rosterCounts.white > 0) game.rosterCounts[player.team] += 1;
+  attachPlayer(room, player, ws);
+  broadcast(room);
+}
+
+// 토큰은 해당 참가자의 joined 응답에만 포함합니다. 공개 상태·QR에는 넣지 않습니다.
+function attachPlayer(room, player, ws, resumed = false) {
+  const oldSocket = player.ws;
+  if (oldSocket && oldSocket !== ws) {
+    socketRooms.delete(oldSocket);
+    oldSocket.close(1000, '다른 화면에서 다시 접속했어요.');
+  }
+  player.ws = ws;
+  player.disconnectedAt = null;
+  room.emptySince = null;
+  socketRooms.set(ws, room.id);
   ws.playerId = player.id;
   ws.sentState = null;
-  send(ws, { type: 'joined', roomId, roomUrl: getRoomUrl(roomId), player: { id: player.id, name: player.name, team: player.team, characterId: player.characterId, isHost: player.isHost } });
+  send(ws, { type: 'joined', roomId: room.id, roomUrl: getRoomUrl(room.id), token: player.token, resumed,
+    player: { id: player.id, name: player.name, team: player.team, characterId: player.characterId, isHost: player.isHost } });
+  sendPlayerState(room, player);
+  // 모두 연결을 끊었던 릴레이도 재접속하면 다음 대표를 다시 고릅니다.
+  if (room.game.mode === 'relay' && (!room.game.relay || room.game.relay.lastResult)) startRelayDuel(room);
+}
+
+function resumePlayer(ws, message) {
+  if (getPlayerBySocket(ws)) return;
+  const room = rooms.get(normalizeRoomId(message.roomId));
+  const playerId = typeof message.token === 'string' ? room?.playerTokens.get(message.token) : null;
+  const player = playerId ? room.players.get(playerId) : null;
+  if (!player) return send(ws, { type: 'resumeFailed', message: '이전 접속을 복구할 수 없어요. 방 코드와 닉네임으로 다시 입장해 주세요.' });
+  attachPlayer(room, player, ws, true);
+  broadcast(room);
+}
+
+function deleteRoom(room) {
+  clearTimeout(room.broadcastTimer);
+  rooms.delete(room.id);
+}
+
+function leavePlayer(ws) {
+  const room = getRoomBySocket(ws);
+  const player = getPlayerBySocket(ws);
+  if (!player) return;
+  socketRooms.delete(ws);
+  room.players.delete(player.id);
+  room.playerTokens.delete(player.token);
+  if (![...room.players.values()].some((entry) => !entry.isAI)) return deleteRoom(room);
+  if (player.isHost) {
+    const humans = [...room.players.values()].filter((entry) => !entry.isAI);
+    const next = humans.find((entry) => entry.ws?.readyState === 1) || humans[0];
+    next.isHost = true;
+    applyHostParticipation(room, next);
+    if (room.sessionMode === 'waiting') resetRoomToLobby(room);
+  }
+  if (![...room.players.values()].some((entry) => !entry.isAI && entry.ws?.readyState === 1)) room.emptySince = Date.now();
   broadcast(room);
 }
 
@@ -1308,6 +1369,7 @@ function createRoomAndJoin(ws, message) {
     send(ws, { type: 'error', message: '선생님 참가 방식을 다시 선택해 주세요.' });
     return;
   }
+  if (rooms.size >= MAX_ROOMS) return send(ws, { type: 'error', message: '지금 열려 있는 방이 많아요. 잠시 뒤 다시 방을 만들어 주세요.' });
   const room = createRoom(message.playMode || 'typing', message.hostParticipation || 'auto');
   send(ws, { type: 'roomCreated', roomId: room.id, roomUrl: getRoomUrl(room.id) });
   joinPlayer(ws, { ...message, name, roomId: room.id });
@@ -1396,6 +1458,8 @@ function handleMessage(ws, rawMessage) {
 
   if (message.type === 'createRoom') return createRoomAndJoin(ws, message);
   if (message.type === 'join') return joinPlayer(ws, message);
+  if (message.type === 'resume') return resumePlayer(ws, message);
+  if (message.type === 'leave') return leavePlayer(ws);
   const player = getPlayerBySocket(ws);
   if (!player) return;
 
@@ -1422,6 +1486,11 @@ function handleMessage(ws, rawMessage) {
 function tick() {
   const now = Date.now();
   for (const room of rooms.values()) {
+    // 연결이 끊긴 방은 15분간 재접속용으로 보관하며 DB에 저장하지 않습니다.
+    if (room.emptySince !== null) {
+      if (now - room.emptySince >= 15 * 60_000) deleteRoom(room);
+      continue;
+    }
     const game = room.game;
     if (game.phase === 'round') {
       if (now >= game.roundEndsAt) finishRound(room);
@@ -1443,7 +1512,7 @@ function tick() {
   }
 
   for (const room of rooms.values()) {
-    if (now - (room.lastBroadcastAt || 0) >= 500) broadcast(room);
+    if (room.emptySince === null && now - (room.lastBroadcastAt || 0) >= 500) broadcast(room);
   }
 }
 
@@ -1536,19 +1605,13 @@ websocketServer.on('connection', (ws, request) => {
   ws.on('close', () => {
     const room = getRoomBySocket(ws);
     const player = getPlayerBySocket(ws);
-    if (!player) return;
-    room.players.delete(player.id);
     socketRooms.delete(ws);
-    if ((room.game.phase === 'lobby' || room.sessionMode === 'waiting') && player.isHost) {
-      const nextHost = room.players.values().next().value;
-      if (nextHost) {
-        nextHost.isHost = true;
-        room.hostParticipation = room.sessionMode === 'waiting' ? 'auto' : nextHost.spectator ? 'observe' : 'auto';
-        if (room.sessionMode === 'waiting') resetRoomToLobby(room);
-      }
-    }
-    if (![...room.players.values()].some((entry) => !entry.isAI)) rooms.delete(room.id);
-    else broadcast(room);
+    if (!player || player.ws !== ws) return;
+    player.ws = null;
+    player.disconnectedAt = Date.now();
+    // 새로고침 중에도 방장 권한·팀·점수·문제 진행을 그대로 유지합니다.
+    if (![...room.players.values()].some((entry) => !entry.isAI && entry.ws?.readyState === 1)) room.emptySince = Date.now();
+    broadcast(room);
   });
 });
 

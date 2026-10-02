@@ -198,5 +198,5 @@ test('AI는 타자·객관식·띄어쓰기·릴레이에서도 실제 답안을
   const outside = await connect();
   const missingRoom = outside.wait((message) => message.type === 'error');
   outside.send({ type: 'join', roomId: relay.roomId, name: '확인' });
-  assert.match((await missingRoom).message, /방을 찾을 수/);
+  assert.match((await missingRoom).message, /AI 1:1/);
 });

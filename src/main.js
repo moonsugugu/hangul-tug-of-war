@@ -1,3 +1,5 @@
+import { openQrDialog } from './qr-dialog.js';
+import { loadSession, saveSession, forgetSession } from './session.js';
 import './styles.css';
 import { mountTugScene } from './tugScene.js';
 import { startBgm, stopBgm, unlockSoundEffects, playVictorySound } from './bgm.js';
@@ -9,6 +11,7 @@ import { AI_LEVELS, getAiLevel } from '../shared/ai-levels.js';
 
 const app = document.querySelector('#app');
 const initialRoomId = normalizeRoomId(new URLSearchParams(window.location.search).get('room'));
+const initialSession = loadSession(initialRoomId);
 const state = {
   connected: false,
   joined: false,
@@ -19,8 +22,8 @@ const state = {
   result: null,
   notice: '',
   soundEnabled: false,
-  nickname: '',
-  selectedCharacter: 'bear',
+  nickname: initialSession?.name || '',
+  selectedCharacter: initialSession?.characterId || 'bear',
   selectedPlayMode: 'typing',
   selectedAiLevel: 1,
   pendingChoiceId: null,
@@ -31,6 +34,11 @@ const state = {
 };
 
 let socket;
+let reconnectTimer;
+let reconnectAttempts = 0;
+let resumeToken = initialSession?.token || null;
+let qrCache = { url: '', promise: null };
+let qrDialog;
 let lastViewKey = '';
 let lastPromptKey = '';
 let tugScene = null;
@@ -144,20 +152,28 @@ function updateRoomUrl(roomId) {
 function connect() {
   const protocol = location.protocol === 'https:' ? 'wss' : 'ws';
   const host = location.port === '5173' ? `${location.hostname}:8787` : location.host;
+  clearTimeout(reconnectTimer);
   socket = new WebSocket(`${protocol}://${host}/ws?delta=1`);
+  const currentSocket = socket;
 
   socket.addEventListener('open', () => {
+    if (socket !== currentSocket) return;
     state.connected = true;
+    if (resumeToken && state.roomId) send({ type: 'resume', roomId: state.roomId, token: resumeToken });
     render();
   });
-  socket.addEventListener('close', () => {
+  socket.addEventListener('close', (event) => {
+    if (socket !== currentSocket) return;
     state.connected = false;
     state.joined = false;
     state.uploadingQuestions = false;
     render();
-    setTimeout(connect, 1500);
+    // 같은 참가자를 다른 탭에서 열면 이전 탭의 자동 복구 경쟁을 막습니다.
+    if (event.code === 1000) { showNotice('다른 화면에서 접속했어요. 이 화면을 사용하려면 새로고침해 주세요.'); return; }
+    reconnectTimer = setTimeout(connect, Math.min(15_000, 500 * 2 ** Math.min(reconnectAttempts++, 5)));
   });
   socket.addEventListener('message', (event) => {
+    if (socket !== currentSocket) return;
     let message = JSON.parse(event.data);
     if (message.type === 'roomCreated') {
       state.roomId = normalizeRoomId(message.roomId);
@@ -166,7 +182,24 @@ function connect() {
       render();
       return;
     }
+    if (message.type === 'resumeFailed') {
+      forgetSession(state.roomId);
+      resumeToken = null;
+      state.data = null;
+      lastViewKey = '';
+      render();
+      showNotice(message.message);
+      return;
+    }
     if (message.type === 'joined') {
+      reconnectAttempts = 0;
+      resumeToken = message.token;
+      if (message.token) saveSession(message.roomId, { token: message.token, name: message.player.name, characterId: message.player.characterId });
+      state.nickname = message.player.name;
+      state.selectedCharacter = message.player.characterId;
+      lastViewKey = '';
+      lastPromptKey = '';
+      state.data = null;
       state.roomId = normalizeRoomId(message.roomId) || state.roomId;
       state.roomUrl = message.roomUrl || state.roomUrl;
       updateRoomUrl(state.roomId);
@@ -322,7 +355,9 @@ function join() {
     showNotice('방을 만들거나 방 코드를 입력해 주세요.');
     return;
   }
-  send({ type: 'join', roomId: state.roomId, name, characterId: state.selectedCharacter });
+  const session = loadSession(state.roomId);
+  if (session) { resumeToken = session.token; send({ type: 'resume', roomId: state.roomId, token: resumeToken }); }
+  else send({ type: 'join', roomId: state.roomId, name, characterId: state.selectedCharacter });
 }
 
 function createRoom() {
@@ -350,6 +385,12 @@ function joinByRoomCode() {
 }
 
 function clearRoom() {
+  if (state.joined) send({ type: 'leave' });
+  forgetSession(state.roomId);
+  resumeToken = null;
+  state.joined = false;
+  state.data = null;
+  qrDialog?.close();
   state.roomId = '';
   state.roomUrl = '';
   updateRoomUrl('');
@@ -357,7 +398,9 @@ function clearRoom() {
 }
 
 function getRoomShareUrl() {
-  const url = new URL(state.roomUrl || window.location.href);
+  const url = new URL(window.location.href);
+  url.search = '';
+  url.hash = '';
   url.searchParams.set('room', state.roomId);
   return url.toString();
 }
@@ -371,20 +414,36 @@ async function copyRoomLink() {
   }
 }
 
-async function renderRoomQr() {
-  const image = document.querySelector('#room-qr');
-  if (!image || !state.roomId) return;
+function roomQrSource() {
+  const url = getRoomShareUrl();
+  if (qrCache.url !== url) qrCache = { url, promise: QRCode.toString(url, {
+    type: 'svg', margin: 2, errorCorrectionLevel: 'M', color: { dark: '#2f2b37', light: '#fffdf9' },
+  }).then((svg) => `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`) };
+  return qrCache.promise;
+}
+
+async function showRoomQr() {
+  if (qrDialog?.open || !state.roomId) return;
+  const roomId = state.roomId;
   try {
-    const dataUrl = await QRCode.toDataURL(getRoomShareUrl(), {
-      width: 188,
-      margin: 1,
-      errorCorrectionLevel: 'M',
-      color: { dark: '#2f2b37', light: '#fffdf9' },
-    });
-    if (image.isConnected) image.src = dataUrl;
-  } catch (error) {
-    console.error('QR 코드를 만들지 못했어요.', error);
-  }
+    const src = await roomQrSource();
+    if (state.roomId !== roomId || qrDialog?.open) return;
+    qrDialog = openQrDialog({ src, roomId, url: getRoomShareUrl() });
+  } catch { showNotice('QR을 만들지 못했어요. 방 코드나 초대 링크를 사용해 주세요.'); }
+}
+
+async function renderRoomQr() {
+  const images = document.querySelectorAll('#room-qr, [data-room-qr]');
+  if (!images.length || !state.roomId) return;
+  try {
+    const src = await roomQrSource();
+    for (const image of images) if (image.isConnected) image.src = src;
+  } catch { showNotice('QR을 만들지 못했어요. 방 코드나 초대 링크를 사용해 주세요.'); }
+}
+
+function renderTeacherQr() {
+  if (!state.joined || !state.data?.self?.isHost) return '';
+  return `<button id="teacher-join-qr" type="button" class="teacher-join-qr" aria-label="학생 입장 QR 크게 보기"><img data-room-qr alt="학생 입장 QR" /><span><small>학생 입장 · 다시 접속</small><b>${escapeHtml(state.roomId)}</b><small>눌러서 크게 보기</small></span></button>`;
 }
 
 function startGame() {
@@ -542,7 +601,7 @@ function renderHeader() {
       <a class="brand-mark" href="/" aria-label="말모이 줄다리기 홈">
         <span class="brand-mark__seal">한</span>
         <span>
-          <span class="brand-mark__title"><strong>말모이 줄다리기</strong><span class="brand-mark__version">ver.1.0.5</span></span>
+          <span class="brand-mark__title"><strong>말모이 줄다리기</strong><span class="brand-mark__version">ver.1.0.6</span></span>
           <small>한글날 기념 타자 대전</small>
         </span>
       </a>
@@ -1053,7 +1112,7 @@ function render() {
     : data.phase === 'placement' ? renderPlacement(data)
       : data.phase === 'teamReveal' ? renderTeamReveal(data)
         : renderGame();
-  app.innerHTML = `${renderHeader()}<main>${page}</main><div id="notice-root"></div><div id="toast-root"></div><div id="wrong-answer-root"></div>`;
+  app.innerHTML = `${renderHeader()}<main>${page}</main>${renderTeacherQr()}<div id="notice-root"></div><div id="toast-root"></div><div id="wrong-answer-root"></div>`;
   const input = document.querySelector('#answer-input');
   if (input) input.value = state.draft;
   bindEvents();
@@ -1076,6 +1135,14 @@ function render() {
 }
 
 function bindEvents() {
+  document.querySelector('#teacher-join-qr')?.addEventListener('click', showRoomQr);
+  document.querySelectorAll('#room-qr').forEach((image) => {
+    image.tabIndex = 0;
+    image.setAttribute('role', 'button');
+    image.setAttribute('aria-label', '학생 입장 QR 크게 보기');
+    image.addEventListener('click', showRoomQr);
+    image.addEventListener('keydown', (event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); showRoomQr(); } });
+  });
   document.querySelector('#ai-level-select')?.addEventListener('change', (event) => { state.selectedAiLevel = Number(event.target.value); });
   document.querySelector('#start-waiting-button')?.addEventListener('click', () => send({ type: 'startWaiting' }));
   document.querySelector('#start-ai-button')?.addEventListener('click', () => send({ type: 'startAI', level: Number(document.querySelector('#ai-level-select')?.value || 1) }));

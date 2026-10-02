@@ -566,3 +566,25 @@ button:disabled { cursor: wait; opacity: .65; }
   .prompt-card { padding: 19px 13px; }
   .result-toast { right: 11px; left: 11px; min-width: 0; }
 }
+
+.qr-open { display: inline-flex; padding: 0; background: white; border: 0; border-radius: 12px; cursor: zoom-in; }
+.qr-popup { box-sizing: border-box; margin: auto; max-width: calc(100vw - 32px); max-height: calc(100dvh - 32px); padding: 24px; border: 3px solid #302b37; border-radius: 24px; background: #fffdf9; color: #302b37; text-align: center; overflow: auto; font: inherit; }
+.qr-popup::backdrop { background: rgba(20,20,30,.65); }
+.qr-popup h2 { padding: 0 22px; margin: 8px 0 18px; font-size: 22px; }
+.qr-popup-image { display: block; max-width: 100%; height: auto; margin: 0 auto 14px; border-radius: 8px; }
+.qr-popup-close { position: absolute; right: 10px; top: 8px; background: white; border: 2px solid #302b37; border-radius: 10px; width: 36px; height: 36px; font-size: 24px; cursor: pointer; }
+.qr-popup-size { display: flex; gap: 12px; align-items: center; }
+.qr-popup-size label { flex: 1; font-size: 14px; }
+.qr-popup-size input { display: block; width: 100%; margin-top: 8px; accent-color: #356c49; }
+.qr-popup-size output { margin-left: 8px; }
+.qr-popup-size button { width: 36px; height: 36px; border: 2px solid #302b37; border-radius: 10px; background: white; font-size: 22px; cursor: pointer; }
+.qr-popup-code { font-size: 24px; font-weight: 800; margin: 16px 0 8px; }
+.qr-popup-note { font-size: 14px; line-height: 1.6; }
+.qr-popup-copy { padding: 10px 16px; border: 2px solid #302b37; border-radius: 12px; background: #e7f2dc; color: #302b37; font: inherit; cursor: pointer; }
+
+.teacher-join-qr { position: fixed; right: 16px; bottom: 16px; z-index: 30; display: flex; gap: 10px; align-items: center; padding: 8px 12px; border: 2px solid #302b37; border-radius: 14px; background: #fffdf9; color: #302b37; box-shadow: 0 4px 12px #0003; cursor: zoom-in; }
+.teacher-join-qr img { width: 64px; height: 64px; }
+.teacher-join-qr span { display: grid; gap: 2px; text-align: left; }
+.teacher-join-qr small { font-size: 12px; }
+.teacher-join-qr b { font-size: 20px; letter-spacing: 2px; }
+@media (max-width: 600px) { .teacher-join-qr { right: 8px; bottom: 8px; } .teacher-join-qr img { width: 44px; height: 44px; } }
