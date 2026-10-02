@@ -588,3 +588,43 @@ button:disabled { cursor: wait; opacity: .65; }
 .teacher-join-qr small { font-size: 12px; }
 .teacher-join-qr b { font-size: 20px; letter-spacing: 2px; }
 @media (max-width: 600px) { .teacher-join-qr { right: 8px; bottom: 8px; } .teacher-join-qr img { width: 44px; height: 44px; } }
+
+.lobby-room--compact { padding-top: 18px; }
+.lobby-room--host { padding-bottom: 100px; }
+.lobby-room--compact .lobby-title-row { margin-bottom: 16px; }
+.lobby-room--compact .lobby-title-row h1 { font-size: clamp(30px, 4vw, 42px); }
+.lobby-entry-grid { display: grid; grid-template-columns: 1.15fr 1fr; gap: 16px; margin-bottom: 14px; }
+.lobby-entry-grid .room-share { margin: 0; padding: 18px; gap: 14px; }
+.lobby-entry-grid .room-share h2 { font-size: 22px; }
+.lobby-entry-grid .room-share-copy > .muted { margin-bottom: 12px; }
+.lobby-entry-grid .room-qr-box img { width: 150px; height: 150px; }
+.lobby-entry-grid .lobby-roster { padding: 18px; }
+.lobby-entry-grid .player-chips { margin-top: 14px; max-height: 150px; overflow-y: auto; align-content: flex-start; }
+.lobby-room--compact .teacher-settings, .lobby-room--compact .solo-launch { margin: 0 0 10px; padding: 14px 18px; }
+.solo-launch summary { cursor: pointer; font-size: 16px; font-weight: 700; min-height: 32px; }
+.lobby-start-bar { position: fixed; bottom: max(12px, env(safe-area-inset-bottom)); left: 50%; transform: translateX(-50%); z-index: 25; width: min(1180px, calc(100% - 36px)); display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 18px; border: 2px solid var(--blue); border-radius: 18px; background: var(--paper); box-shadow: var(--shadow); }
+.lobby-start-bar > div { min-width: 0; display: grid; gap: 4px; }
+.lobby-start-bar strong { font-size: 16px; }
+.lobby-start-bar > div > span { font-size: 12px; color: var(--muted); }
+.lobby-start-bar .primary-button { flex-shrink: 0; width: auto; min-width: 155px; }
+@media (max-width: 900px) {
+  .lobby-entry-grid { grid-template-columns: 1fr; }
+  .lobby-entry-grid .room-share { grid-template-columns: minmax(0, 1fr) auto; }
+  .lobby-entry-grid .room-link-row { grid-template-columns: minmax(0, 1fr) auto; }
+  .lobby-entry-grid .room-link-row .secondary-button { width: auto; }
+  .lobby-entry-grid .room-qr-box { justify-self: end; }
+}
+@media (max-width: 480px) {
+  .lobby-entry-grid .room-share { padding: 12px; gap: 10px; }
+  .lobby-entry-grid .room-share h2 { font-size: 19px; }
+  .lobby-entry-grid .room-qr-box { padding: 5px; }
+  .lobby-entry-grid .room-qr-box img { width: 110px; height: 110px; }
+  .lobby-entry-grid .room-link-note { display: none; }
+  .lobby-entry-grid .room-link-row { grid-template-columns: 1fr; }
+  .lobby-entry-grid .room-link-row input { display: none; }
+  .lobby-entry-grid .room-link-row .secondary-button { justify-self: start; }
+  .lobby-start-bar { width: calc(100% - 22px); gap: 8px; padding: 10px 12px; }
+  .lobby-start-bar strong { font-size: 14px; }
+  .lobby-start-bar > div > span { font-size: 11px; }
+  .lobby-start-bar .primary-button { min-width: 116px; padding: 12px; gap: 10px; }
+}

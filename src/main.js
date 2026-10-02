@@ -26,6 +26,8 @@ const state = {
   selectedCharacter: initialSession?.characterId || 'bear',
   selectedPlayMode: 'typing',
   selectedAiLevel: 1,
+  teacherSettingsOpen: false,
+  soloLaunchOpen: false,
   pendingChoiceId: null,
   uploadingQuestions: false,
   questionUploadStatus: '',
@@ -505,7 +507,7 @@ async function renderRoomQr() {
 }
 
 function renderTeacherQr() {
-  if (!state.joined || !state.data?.self?.isHost) return '';
+  if (!state.joined || !state.data?.self?.isHost || state.data.phase === 'lobby') return '';
   return `<button id="teacher-join-qr" type="button" class="teacher-join-qr" aria-label="학생 입장 QR 크게 보기"><img data-room-qr alt="학생 입장 QR" /><span><small>학생 입장 · 다시 접속</small><b>${escapeHtml(state.roomId)}</b><small>눌러서 크게 보기</small></span></button>`;
 }
 
@@ -578,7 +580,7 @@ function refreshTeacherSettings() {
   root.innerHTML = renderTeacherSettings(state.data);
   bindTeacherSettings(root);
   const startButton = document.querySelector('#start-button');
-  if (startButton) startButton.disabled = state.uploadingQuestions;
+  if (startButton) startButton.disabled = state.uploadingQuestions || state.data.players.filter((player) => !player.spectator).length < 2;
   const waitingButton = document.querySelector('#start-waiting-button');
   if (waitingButton) waitingButton.disabled = state.uploadingQuestions;
   const aiButton = document.querySelector('#start-ai-button');
@@ -586,6 +588,7 @@ function refreshTeacherSettings() {
 }
 
 function bindTeacherSettings(root) {
+  root.querySelector('details')?.addEventListener('toggle', (event) => { state.teacherSettingsOpen = event.target.open; });
   root.querySelectorAll('input[name="host-participation"]').forEach((input) => {
     input.addEventListener('change', () => send({ type: 'setHostParticipation', participation: input.value }));
   });
@@ -731,7 +734,7 @@ function renderRoomShare() {
 function renderTeacherSettings(data) {
   if (!data?.self?.isHost || data.phase !== 'lobby') return '';
   const uploaded = data.questionSet?.count > 0;
-  return `<details class="teacher-settings panel-card" open>
+  return `<details class="teacher-settings panel-card" ${state.teacherSettingsOpen ? 'open' : ''}>
     <summary>⚙ 선생님 설정</summary>
     <div class="teacher-settings-content">
       <fieldset class="teacher-participation"><legend>선생님 경기 참가</legend>
@@ -757,13 +760,14 @@ function renderTeacherSettings(data) {
 function renderSoloLaunch(data) {
   if (!data?.self?.isHost) return '';
   const alone = data.players?.length === 1;
-  return `<section class="solo-launch panel-card" aria-label="선생님 혼자 시작하기">
-    <div><div class="section-kicker">SOLO PLAY</div><h2>학생들이 오기 전에도 시작해요</h2><p>대기 모드로 문제를 살펴보거나, AI와 1:1로 겨뤄 보세요.</p></div>
+  return `<details id="solo-launch" class="solo-launch panel-card" ${state.soloLaunchOpen ? 'open' : ''}>
+    <summary>혼자 연습 · 대기 모드 / AI와 붙기</summary>
+    <p>학생들이 오기 전, 대기 모드로 문제를 살펴보거나 AI와 1:1로 겨뤄 보세요.</p>
     <div class="solo-launch-grid">
       <article><h3>게임 시작 대기 모드</h3><p>QR을 띄워 학생 입장을 받으면서 1~4라운드를 혼자 연습해요.</p><button type="button" id="start-waiting-button" class="secondary-button" ${state.uploadingQuestions ? 'disabled' : ''}>대기 모드 시작</button></article>
       <article><h3>AI와 붙기 · 1:1</h3><p>선생님은 청팀, AI는 백팀! 높은 단계일수록 더 빠르고 정확하게 답해요.</p><label for="ai-level-select" class="field-label">AI 난이도 · 10단계</label><select id="ai-level-select" class="text-input">${AI_LEVELS.map((entry) => `<option value="${entry.level}" ${entry.level === state.selectedAiLevel ? 'selected' : ''}>${entry.level}단계 · ${entry.label}</option>`).join('')}</select><button type="button" id="start-ai-button" class="primary-button compact" ${!alone || state.uploadingQuestions ? 'disabled' : ''}>AI와 붙기</button>${!alone ? '<small>AI 1:1은 방에 혼자 있을 때 시작할 수 있어요.</small>' : ''}</article>
     </div>
-  </section>`;
+  </details>`;
 }
 
 function renderWaitingControls(data) {
@@ -815,21 +819,21 @@ function renderLobby() {
 
   const players = data?.players || [];
   const isHost = data?.self?.isHost;
+  const participantCount = players.filter((player) => !player.spectator).length;
+  const studentCount = players.filter((player) => !player.isHost).length;
 
   return `
-    <section class="lobby-room">
+    <section class="lobby-room lobby-room--compact ${isHost ? 'lobby-room--host' : ''}">
       <div class="lobby-title-row">
         <div>
           <div class="section-kicker">WAITING ROOM</div>
           <h1>모두 모이면 시작해요</h1>
-          <p class="muted">입장 ${players.length}/${data?.maxPlayers || 30}명 · 경기 참가 ${players.filter((player) => !player.spectator).length}명${players.some((player) => player.spectator) ? ' · 선생님은 진행만 해요' : ''}<br />${data?.playMode === 'tablet' ? '태블릿 객관식 모드 · 터치로만 경기하고 팀은 무작위로 나눠요.' : '기존 타자 모드 · 자유 연습 뒤 타자 실력을 재서 팀을 나눠요.'}</p>
+          <p class="muted">학생 입장 ${studentCount}/${data?.maxPlayers || 30}명 · 경기 참가 ${participantCount}명${players.some((player) => player.spectator) ? ' · 선생님은 진행만 해요' : ''}<br />${data?.playMode === 'tablet' ? '태블릿 객관식 모드 · 터치로만 경기하고 팀은 무작위로 나눠요.' : '기존 타자 모드 · 자유 연습 뒤 타자 실력을 재서 팀을 나눠요.'}</p>
         </div>
-        ${isHost ? `<button id="start-button" class="primary-button compact" ${state.uploadingQuestions ? 'disabled' : ''}>게임 시작 <span>→</span></button>` : '<span class="waiting-pill"><i></i> 진행자를 기다리는 중</span>'}
+        ${isHost ? '' : '<span class="waiting-pill"><i></i> 진행자를 기다리는 중</span>'}
       </div>
-      <div id="teacher-settings-root">${renderTeacherSettings(data)}</div>
-      ${renderSoloLaunch(data)}
-      ${renderRoomShare()}
-      <div id="practice-root">${renderPracticeCard(data)}</div>
+      <div class="lobby-entry-grid">
+        ${renderRoomShare()}
       <article class="team-lobby-card lobby-roster">
         <div class="team-card-top"><span class="team-badge">모</span><span>참가자</span><strong>${players.length}명</strong></div>
         <div class="player-chips">${players.map((player) => {
@@ -838,10 +842,15 @@ function renderLobby() {
           return `<span class="player-chip ${isSelf ? 'is-self' : ''}"><span aria-hidden="true">${character.emoji}</span>${escapeHtml(player.name)}${isSelf ? '<small>나</small>' : ''}${player.isHost ? `<small>${player.spectator ? '진행만' : '진행·참가'}</small>` : ''}</span>`;
         }).join('') || '<span class="muted">참가자를 기다리는 중</span>'}</div>
       </article>
+      </div>
+      <div id="teacher-settings-root">${renderTeacherSettings(data)}</div>
+      ${renderSoloLaunch(data)}
+      <div id="practice-root">${data.self?.spectator ? '' : renderPracticeCard(data)}</div>
       <div class="how-to panel-card">
         <div><span class="how-icon">✦</span><strong>게임 규칙</strong></div>
         <p>${data?.playMode === 'tablet' ? '<b>타자 테스트 없이 모든 라운드를 터치 객관식으로 진행해요.</b> 보기 4개 중 한 번만 선택하세요. 기본 정답은 60점에 속도 보너스 최대 40점, 기본 오답 감점은 30점이에요. 선생님이 경기 중 설정한 배율을 곱하고, 정답에는 라운드·인원 보정도 적용돼요. 오답 해설은 3초 동안 보여 줘요.' : '위 연습은 점수에 반영되지 않아요. 방장이 시작하면 <b>30초 동안 문장을 입력해 타자 실력을 재고</b>, 팀을 자동으로 나눈 뒤 1라운드를 시작해요. 인원이 적은 팀에는 인원수 비율만큼 보정 점수가 적용돼요.'}</p>
       </div>
+      ${isHost ? `<div class="lobby-start-bar panel-card" aria-label="학급 경기 시작"><div><strong>학생 ${studentCount}명 입장</strong><span>경기 참가 ${participantCount}명${participantCount < 2 ? ' · 2명 이상 모이면 시작할 수 있어요' : ' · 모두 모였으면 시작해 주세요'}</span></div><button id="start-button" type="button" class="primary-button compact" ${state.uploadingQuestions || participantCount < 2 ? 'disabled' : ''}>게임 시작 <span>→</span></button></div>` : ''}
     </section>
   `;
 }
@@ -910,7 +919,7 @@ function renderPromptOnly() {
     return;
   }
   root.innerHTML = data.phase === 'lobby'
-    ? renderPracticeCard(data)
+    ? data.self?.spectator ? '' : renderPracticeCard(data)
     : data.phase === 'placement' ? renderPlacementCard(data) : renderPrompt(data);
   const input = root.querySelector('#answer-input');
   if (input) input.value = state.draft;
@@ -1198,6 +1207,7 @@ function render() {
 }
 
 function bindEvents() {
+  document.querySelector('#solo-launch')?.addEventListener('toggle', (event) => { state.soloLaunchOpen = event.target.open; });
   document.querySelector('#teacher-join-qr')?.addEventListener('click', showRoomQr);
   document.querySelectorAll('#room-qr').forEach((image) => {
     image.tabIndex = 0;
