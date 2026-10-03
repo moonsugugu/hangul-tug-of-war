@@ -590,11 +590,32 @@ function send(ws, payload, serialized) {
   if (canSend(ws)) ws.send(serialized ? encodeMessage(payload, serialized) : JSON.stringify(payload));
 }
 
+// 남은 시간 칸(…RemainingMs)만 바뀐 메시지인지. 0.5초마다 나가던 메시지의 대부분이 이것이었다(2026-10-03 실측 67~72%).
+const TIMER_ONLY_IGNORED = new Set(['full', 'type', 'roomId']);
+function isTimerOnly(message) {
+  let timer = false;
+  for (const key of Object.keys(message)) {
+    if (TIMER_ONLY_IGNORED.has(key)) continue;
+    if (!key.endsWith('RemainingMs')) return false;
+    timer = true;
+  }
+  return timer;
+}
+// 남은 시간을 스스로 세는 화면(clock=1)에 시간만 바뀐 메시지는 5초에 한 번만 보낸다(어긋남 바로잡기용).
+const CLOCK_RESYNC_MS = 5_000;
+
 function sendPlayerState(room, player, common, serialized) {
   if (!canSend(player.ws)) return;
   const state = publicStateFor(room, player, common);
   const message = player.ws.supportsDelta ? stateDelta(player.ws, state, serialized) : state;
-  if (message) send(player.ws, message, serialized);
+  if (!message) return;
+  const ws = player.ws;
+  if (ws.localClock && message.full === false && isTimerOnly(message)) {
+    const now = Date.now();
+    if (now - (ws.clockSyncedAt || 0) < CLOCK_RESYNC_MS) return;
+    ws.clockSyncedAt = now;
+  } else if (ws.localClock) ws.clockSyncedAt = Date.now();
+  send(ws, message, serialized);
 }
 
 function broadcastPhase(room) {
@@ -1629,6 +1650,7 @@ websocketServer.on('connection', (ws, request) => {
   // 바뀐 학생 줄만 받아 합칠 줄 아는 새 화면(pu). 예전 화면은 players 전체를 받는다.
   ws.supportsRowPatch = ['1', '2'].includes(new URL(request.url, 'http://localhost').searchParams.get('rows'));
   ws.supportsFieldPatch = new URL(request.url, 'http://localhost').searchParams.get('rows') === '2'; // 바뀐 칸만(pf) 받는 화면
+  ws.localClock = new URL(request.url, 'http://localhost').searchParams.get('clock') === '1'; // 남은 시간을 스스로 세는 화면
   ws.isAlive = true;
   ws.on('pong', () => { ws.isAlive = true; });
   ws.on('error', () => ws.close());

@@ -217,7 +217,7 @@ function connect() {
   const protocol = location.protocol === 'https:' ? 'wss' : 'ws';
   const host = location.port === '5173' ? `${location.hostname}:8787` : location.host;
   clearTimeout(reconnectTimer);
-  socket = new WebSocket(`${protocol}://${host}/ws${currentShard ? `/s${currentShard}` : ''}?delta=1&rows=2`);
+  socket = new WebSocket(`${protocol}://${host}/ws${currentShard ? `/s${currentShard}` : ''}?delta=1&rows=2&clock=1`);
   const currentSocket = socket;
 
   socket.addEventListener('open', () => {
@@ -274,6 +274,8 @@ function connect() {
       return;
     }
     if (message.type === 'state') {
+      // 남은 시간(…RemainingMs)을 받은 순간을 기억하고, 그다음은 화면이 스스로 뺀다(clock=1). 라운드 끝 판정은 서버가 한다.
+      if (Object.keys(message).some((key) => key.endsWith('RemainingMs'))) state.timerAt = performance.now();
       message = mergeState(state.data, message);
       state.roomId = normalizeRoomId(message.roomId) || state.roomId;
       state.roomUrl = message.roomUrl || state.roomUrl;
@@ -619,6 +621,12 @@ function sendRoundDraft(text, boundPrompt, boundPhase, boundRoundIndex) {
     if (prompt.relayDeadline !== boundPrompt.relayDeadline) return;
     send({ type: 'draft', deadline: prompt.relayDeadline, text });
   }
+}
+
+// 마지막으로 받은 남은 시간에서 받은 뒤 흐른 시간을 뺀 값
+function liveMs(ms) {
+  const base = Number(ms) || 0;
+  return state.timerAt === undefined ? base : Math.max(0, base - (performance.now() - state.timerAt));
 }
 
 function getTimeLabel(ms) {
@@ -1314,6 +1322,9 @@ function bindPromptEvents(root) {
   root.querySelector('#answer-input')?.focus();
 }
 
+// 남은 시간을 화면이 스스로 센다: 0.25초마다 시간 칸만 새로 쓴다.
+setInterval(() => { if (state.data) updateDynamic(); }, 250);
+
 function updateDynamic() {
   const data = state.data;
   if (!data) return;
@@ -1323,8 +1334,8 @@ function updateDynamic() {
     button.setAttribute('aria-pressed', String(Number(button.dataset.scoreMultiplier) === (data.scoreMultiplier || 1)));
   });
   const time = document.querySelector('#arena-time');
-  if (time) time.textContent = data.phase === 'round' ? getTimeLabel(data.timeRemainingMs) : data.phase === 'roundIntro' ? getTimeLabel(data.roundIntroRemainingMs) : data.phase === 'intermission' ? getTimeLabel(data.intermissionRemainingMs) : data.phase === 'wheel' ? getTimeLabel(data.wheelRemainingMs) : '완료';
-  document.querySelectorAll('.intro-time').forEach((introTime) => { introTime.textContent = getTimeLabel(data.roundIntroRemainingMs); });
+  if (time) time.textContent = data.phase === 'round' ? getTimeLabel(liveMs(data.timeRemainingMs)) : data.phase === 'roundIntro' ? getTimeLabel(liveMs(data.roundIntroRemainingMs)) : data.phase === 'intermission' ? getTimeLabel(data.intermissionRemainingMs) : data.phase === 'wheel' ? getTimeLabel(data.wheelRemainingMs) : '완료';
+  document.querySelectorAll('.intro-time').forEach((introTime) => { introTime.textContent = getTimeLabel(liveMs(data.roundIntroRemainingMs)); });
   const overtimeBadge = document.querySelector('#overtime-badge');
   if (overtimeBadge) { overtimeBadge.hidden = !data.overtimeCount; overtimeBadge.textContent = `연장전 ${data.overtimeCount || 0}`; }
   const blueScore = document.querySelector('#blue-score');
@@ -1346,15 +1357,15 @@ function updateDynamic() {
   if (blueWins) blueWins.textContent = `라운드 ${data.roundWins?.blue || 0}승`;
   if (whiteWins) whiteWins.textContent = `라운드 ${data.roundWins?.white || 0}승`;
   const wheelTime = document.querySelector('#wheel-time');
-  if (wheelTime) wheelTime.textContent = getTimeLabel(data.wheelRemainingMs);
+  if (wheelTime) wheelTime.textContent = getTimeLabel(liveMs(data.wheelRemainingMs));
   const intermissionTime = document.querySelector('#intermission-time');
-  if (intermissionTime) intermissionTime.textContent = getTimeLabel(data.intermissionRemainingMs);
+  if (intermissionTime) intermissionTime.textContent = getTimeLabel(liveMs(data.intermissionRemainingMs));
   const placementTime = document.querySelector('#placement-time');
-  if (placementTime) placementTime.textContent = getTimeLabel(data.placementRemainingMs);
+  if (placementTime) placementTime.textContent = getTimeLabel(liveMs(data.placementRemainingMs));
   const placementKeystrokes = document.querySelector('#placement-keystrokes');
   if (placementKeystrokes) placementKeystrokes.textContent = formatScore(data.self?.placementKeystrokes);
   const revealTime = document.querySelector('#reveal-time');
-  if (revealTime) revealTime.textContent = getTimeLabel(data.teamRevealRemainingMs);
+  if (revealTime) revealTime.textContent = getTimeLabel(liveMs(data.teamRevealRemainingMs));
   if (positionLabel) positionLabel.textContent = getRopeStepLabel(data);
   const currentTick = getRopeMaxSteps(data) + getRopeStep(data);
   document.querySelectorAll('[data-rope-tick]').forEach((tick) => {
