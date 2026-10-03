@@ -1,8 +1,11 @@
 import { canSend, encodeMessage, stateDelta, takeMessageToken } from './transport.mjs';
 import { BUSY_MESSAGE, createLoadGuard } from './load-guard.mjs';
+import { createTrafficMeter } from './traffic-meter.mjs';
 
 // 과부하 보호(coderule 규칙 19): 서버가 바쁘면 점수·명단 방송을 늦추고, 끊지 않고, 매우 바쁠 때만 새 방을 막는다.
 const loadGuard = createLoadGuard();
+// 실사용 계측(coderule 7번): 실제로 주고받는 양·CPU·메모리를 /health 의 traffic 으로 보여 준다. 보내는 내용은 바꾸지 않는다.
+const trafficMeter = createTrafficMeter();
 import { WORD_PROMPTS, WORD_QUIZ_PROMPTS, HANGUL_CREATION_QUIZ_PROMPTS } from './quiz-prompts.js';
 import { MAX_CSV_BYTES, validateCustomQuestions } from '../shared/question-csv.js';
 import { SCORE_MULTIPLIER_LEVELS, SCORE_SETTING_PHASES, ANSWER_REVIEW_MS } from '../shared/score-settings.js';
@@ -1580,7 +1583,7 @@ async function serveStatic(req, res) {
   if (pathname === '/health' || SHARD_HEALTH_PATH.test(pathname)) {
     const playerCount = [...rooms.values()].reduce((total, room) => total + room.players.size, 0);
     res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
-    res.end(JSON.stringify({ ok: true, version: APP_VERSION, shard: SHARD_ID, shards: SHARD_COUNT, players: playerCount, rooms: rooms.size, load: loadGuard.status() }));
+    res.end(JSON.stringify({ ok: true, version: APP_VERSION, shard: SHARD_ID, shards: SHARD_COUNT, players: playerCount, rooms: rooms.size, load: loadGuard.status(), traffic: trafficMeter.status() }));
     return;
   }
 
@@ -1665,6 +1668,7 @@ httpServer.on('upgrade', (request, socket, head) => {
 });
 
 websocketServer.on('connection', (ws, request) => {
+  trafficMeter.attach(ws);
   ws.supportsDelta = new URL(request.url, 'http://localhost').searchParams.get('delta') === '1';
   // 바뀐 학생 줄만 받아 합칠 줄 아는 새 화면(pu). 예전 화면은 players 전체를 받는다.
   ws.supportsRowPatch = ['1', '2'].includes(new URL(request.url, 'http://localhost').searchParams.get('rows'));
