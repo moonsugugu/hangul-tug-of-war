@@ -4,7 +4,9 @@
 //   0 평소       — 그대로
 //   1 바쁨       — 방송 간격 2배. 하트비트로 연결을 끊지 않음(답이 늦은 건 서버가 바빠서일 수 있다)
 //   2 매우 바쁨  — 방송 간격 3배. 새 방 만들기만 안내 문구로 막는다(이미 수업 중인 반을 지킨다)
-// 올라갈 때는 바로, 내려갈 때는 5초 동안 조용해야 한 단계씩 내려간다(출렁임 방지).
+// 한 번 튄 지연(노트북 전체가 1~5초 멈칫 — 디스크·메모리 페이징, 2026-10-03 실측)으로는 올라가지 않는다.
+// 바쁨은 2번 연속(약 2초), 매우 바쁨은 3번 연속(약 3초) 기준을 넘을 때만 올라간다. 한 번 튄 것은 spikes 로만 센다.
+// 내려갈 때는 5초 동안 조용해야 한 단계씩 내려간다(출렁임 방지).
 // 켜진 뒤 20초는 재기만 하고 단계는 올리지 않는다(3D 서버는 시작할 때 지도 계산으로 몇 초 바쁘다).
 // /health 의 peak 는 최근 10분 동안 가장 높았던 단계다.
 // 기준은 환경변수 LOAD_BUSY_MS(기본 80) · LOAD_OVER_MS(기본 200) · LOAD_WARMUP_MS(기본 20000) 로 바꿀 수 있다. LOAD_GUARD=0 이면 끈다.
@@ -21,6 +23,8 @@ export function createLoadGuard({
   calmMs = 5000,
   warmupMs = process.env.LOAD_WARMUP_MS !== undefined ? Number(process.env.LOAD_WARMUP_MS) : 20_000,
   peakWindowMs = 10 * 60_000,
+  busyStreak = 2,
+  overStreak = 3,
   enabled = process.env.LOAD_GUARD !== '0',
   now = () => Date.now(),
 } = {}) {
@@ -32,13 +36,20 @@ export function createLoadGuard({
   let peakAt = now();
   const startedAt = now();
   let refusedRooms = 0;
+  let spikes = 0;
+  let busyRun = 0;
+  let overRun = 0;
   let sparedSockets = 0;
 
   function update(p99Ms) {
     lagMs = p99Ms;
     if (!enabled) { level = 0; return level; }
     if (now() - startedAt < warmupMs) return level; // 시작 직후는 단계에 넣지 않는다
-    const target = p99Ms >= overMs ? 2 : p99Ms >= busyMs ? 1 : 0;
+    // 연속으로 기준을 넘은 횟수. 한 번만 튄 것은 단계에 넣지 않는다.
+    busyRun = p99Ms >= busyMs ? busyRun + 1 : 0;
+    overRun = p99Ms >= overMs ? overRun + 1 : 0;
+    if (busyRun === 1) spikes += 1;
+    const target = overRun >= overStreak ? 2 : busyRun >= busyStreak ? 1 : 0;
     const t = now();
     if (target >= level) {
       if (target > level && level === 0) busySince = t;
@@ -96,6 +107,7 @@ export function createLoadGuard({
         busySec: busySince === null ? 0 : Math.round((now() - busySince) / 1000),
         peak: LEVEL_NAMES[peakLevel],
         refusedRooms,
+        spikes,
         sparedSockets,
       };
     },
