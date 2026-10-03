@@ -1,4 +1,4 @@
-// 남은 시간을 화면이 스스로 세는 방식(clock=1) 시험: 시간만 바뀐 메시지가 5초에 한 번만 오고,
+// 남은 시간을 화면이 스스로 세는 방식(clock=1) 시험: 시간만 바뀐 메시지가 30초에 한 번(또는 시간이 튈 때)만 오고,
 // 화면처럼 센 남은 시간이 서버 값(옛 화면 clock 없음)과 0.6초 안으로 맞는지. 저장소 폴더에서: node scripts/clock-check.mjs
 import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
@@ -30,7 +30,7 @@ try {
     errs.push(Math.abs(live - truth));
   }
   const timerOnly = (list) => list.filter(({ m }) => m.type === 'state' && Object.keys(m).every((k) => ['full', 'type', 'roomId'].includes(k) || k.endsWith('RemainingMs'))).length;
-  ok('새 화면은 시간만 바뀐 메시지가 5초에 한 번', timerOnly(neu.raw) <= 3, `12초 동안 ${timerOnly(neu.raw)}개`);
+  ok('새 화면은 시간만 바뀐 메시지가 거의 없음(30초에 한 번)', timerOnly(neu.raw) <= 1, `12초 동안 ${timerOnly(neu.raw)}개`);
   ok('옛 화면은 그대로 자주(0.5초마다)', timerOnly(old.raw) >= 10, `12초 동안 ${timerOnly(old.raw)}개`);
   ok('화면이 센 남은 시간 = 서버 남은 시간(0.6초 안)', Math.max(...errs) <= 600, `최대 차이 ${Math.round(Math.max(...errs))}ms`);
   ok('받은 메시지 수가 줄어듦', neu.raw.length < old.raw.length / 2, `새 ${neu.raw.length}개 vs 옛 ${old.raw.length}개`);

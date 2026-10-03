@@ -601,8 +601,27 @@ function isTimerOnly(message) {
   }
   return timer;
 }
-// 남은 시간을 스스로 세는 화면(clock=1)에 시간만 바뀐 메시지는 5초에 한 번만 보낸다(어긋남 바로잡기용).
-const CLOCK_RESYNC_MS = 5_000;
+// 남은 시간을 스스로 세는 화면(clock=1)에는 시간만 바뀐 메시지를 거의 보내지 않는다.
+// - 화면이 예상한 값(지난번 값 - 흐른 시간)과 1초 넘게 다르면(연장전·단계 바뀜 등) 바로 보낸다.
+// - 그 밖에는 30초에 한 번만 바로잡는다.
+const CLOCK_RESYNC_MS = 30_000;
+const CLOCK_JUMP_MS = 1_000;
+function timerJumped(ws, message, now) {
+  const last = ws.clockSent;
+  if (!last) return true;
+  for (const [key, value] of Object.entries(message)) {
+    if (!key.endsWith('RemainingMs')) continue;
+    const before = last.values[key] ?? 0;
+    const expected = Math.max(0, before - (now - last.at));
+    if (Math.abs((Number(value) || 0) - expected) > CLOCK_JUMP_MS) return true;
+  }
+  return false;
+}
+function rememberClock(ws, message, now) {
+  const values = { ...(ws.clockSent?.values || {}) };
+  for (const [key, value] of Object.entries(message)) if (key.endsWith('RemainingMs')) values[key] = Number(value) || 0;
+  ws.clockSent = { values, at: now };
+}
 
 function sendPlayerState(room, player, common, serialized) {
   if (!canSend(player.ws)) return;
@@ -610,11 +629,11 @@ function sendPlayerState(room, player, common, serialized) {
   const message = player.ws.supportsDelta ? stateDelta(player.ws, state, serialized) : state;
   if (!message) return;
   const ws = player.ws;
-  if (ws.localClock && message.full === false && isTimerOnly(message)) {
+  if (ws.localClock) {
     const now = Date.now();
-    if (now - (ws.clockSyncedAt || 0) < CLOCK_RESYNC_MS) return;
-    ws.clockSyncedAt = now;
-  } else if (ws.localClock) ws.clockSyncedAt = Date.now();
+    if (message.full === false && isTimerOnly(message) && now - (ws.clockSent?.at || 0) < CLOCK_RESYNC_MS && !timerJumped(ws, message, now)) return;
+    if (Object.keys(message).some((key) => key.endsWith('RemainingMs'))) rememberClock(ws, message, now);
+  }
   send(ws, message, serialized);
 }
 
