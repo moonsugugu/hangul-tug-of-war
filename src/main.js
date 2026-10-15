@@ -7,6 +7,8 @@ import QRCode from 'qrcode';
 import { MAX_CSV_BYTES, MAX_CUSTOM_QUESTIONS, parseQuestionCsv } from '../shared/question-csv.js';
 import { SCORE_MULTIPLIER_LEVELS, SCORE_SETTING_PHASES, ANSWER_REVIEW_MS } from '../shared/score-settings.js';
 import { HOST_PARTICIPATION_OPTIONS } from '../shared/teacher-participation.js';
+import { QUESTION_LEVEL_OPTIONS } from '../shared/question-levels.js';
+import { defaultRoundSettings } from '../shared/round-settings.js';
 import { AI_LEVELS, getAiLevel } from '../shared/ai-levels.js';
 
 const app = document.querySelector('#app');
@@ -295,6 +297,9 @@ function connect() {
         message.mode?.id,
         message.roundIndex,
         message.questionSet?.revision,
+        message.questionLevel,
+        JSON.stringify(message.roundSettings),
+        message.placementDurationMs,
         message.counts?.blue,
         message.counts?.white,
         message.self?.team,
@@ -387,6 +392,11 @@ function connect() {
       };
       state.draft = '';
       renderResultToast();
+      return;
+    }
+    if (message.type === 'answerTimeout') {
+      state.draft = '';
+      showNotice(message.message);
       return;
     }
     if (message.type === 'error') {
@@ -529,7 +539,7 @@ function submitAnswer() {
   if (state.wrongAnswer || !prompt || !['word', 'repair', 'placement', 'practice'].includes(prompt.kind)) return;
   const answer = document.querySelector('#answer-input')?.value ?? state.draft;
   if (!answer.trim()) return;
-  send({ type: 'answer', answer });
+  send({ type: 'answer', answer, promptId: prompt.id });
 }
 
 function submitChoice(choice) {
@@ -596,6 +606,18 @@ function bindTeacherSettings(root) {
   root.querySelector('details')?.addEventListener('toggle', (event) => { state.teacherSettingsOpen = event.target.open; });
   root.querySelectorAll('input[name="host-participation"]').forEach((input) => {
     input.addEventListener('change', () => send({ type: 'setHostParticipation', participation: input.value }));
+  });
+  root.querySelectorAll('input[name="question-level"]').forEach(input => {
+    input.addEventListener('change', () => send({ type: 'setQuestionLevel', level: input.value }));
+  });
+  root.querySelectorAll('[data-round-field], #placement-seconds').forEach(input => {
+    input.addEventListener('change', () => {
+      const fields = [...root.querySelectorAll('[data-round-field], #placement-seconds')];
+      if (!fields.every(field => field.reportValidity())) return;
+      const roundSettings = Array.from({ length: 4 }, (_, index) => Object.fromEntries(['durationSeconds', 'answerSeconds'].map(field => [field, Number(root.querySelector(`[data-round-index="${index}"][data-round-field="${field}"]`).value)])));
+      const placementSeconds = Number(root.querySelector('#placement-seconds')?.value || 30);
+      send({ type: 'setRoundSettings', roundSettings, placementSeconds });
+    });
   });
   root.querySelector('#upload-csv-button')?.addEventListener('click', () => root.querySelector('#question-csv-file')?.click());
   root.querySelector('#question-csv-file')?.addEventListener('change', (event) => uploadCsvQuestions(event.target.files?.[0]));
@@ -705,7 +727,7 @@ function renderRoomEntryControls() {
     <fieldset class="play-mode-picker">
       <legend>방 모드</legend>
       <label class="play-mode-option"><input type="radio" name="play-mode" value="typing" ${state.selectedPlayMode === 'typing' ? 'checked' : ''} /><span><strong>기존 타자 모드</strong><small>타자 실력으로 팀 배정 · 타자와 퀴즈 4종목</small></span></label>
-      <label class="play-mode-option"><input type="radio" name="play-mode" value="tablet" ${state.selectedPlayMode === 'tablet' ? 'checked' : ''} /><span><strong>태블릿 객관식 모드</strong><small>키보드 없이 터치로만 경기 · 모든 문제 보기 4개</small></span></label>
+      <label class="play-mode-option"><input type="radio" name="play-mode" value="tablet" ${state.selectedPlayMode === 'tablet' ? 'checked' : ''} /><span><strong>태블릿 객관식 모드</strong><small>키보드 없이 터치로만 경기 · 설정에서 저학년 문제 선택</small></span></label>
       <p>객관식 정답 60점 + 빠른 정답 보너스 최대 40점 · 오답 −30점</p>
     </fieldset>
     <button id="create-room-button" class="primary-button">방 만들기 <span>＋</span></button>
@@ -742,12 +764,28 @@ function renderRoomShare() {
   `;
 }
 
+function renderTimeSettings(data) {
+  const rounds = data.roundSettings || defaultRoundSettings(data.playMode);
+  return `<fieldset class="round-time-settings"><legend>라운드·문제 제한 시간</legend><p>경기 시간은 라운드 전체, 문제당 시간은 낱말·문제 하나를 푸는 시간이에요. 0초는 제한 없음이며 타자 릴레이는 1초 이상이에요. 결승은 뽑힌 종목의 설정을 사용해요.</p>
+    <div class="round-time-head"><span>라운드</span><span>경기 시간(초)</span><span>문제당 시간(초)</span></div>
+    ${rounds.map((round, index) => `<div class="round-time-row"><strong>${index + 1}R · ${escapeHtml(data.roundModes?.[index]?.name || '')}</strong><label><span class="sr-only">${index + 1}라운드 경기 시간(초)</span><input class="text-input" type="number" min="30" max="600" step="1" data-round-index="${index}" data-round-field="durationSeconds" value="${round.durationSeconds}" required /></label><label><span class="sr-only">${index + 1}라운드 문제당 시간(초)</span><input class="text-input" type="number" min="${data.playMode === 'typing' && index === 3 ? 1 : 0}" max="120" step="1" data-round-index="${index}" data-round-field="answerSeconds" value="${round.answerSeconds}" required /></label></div>`).join('')}
+    ${data.playMode === 'typing' ? `<label class="placement-time-label" for="placement-seconds">타자 실력 테스트 시간(초)<input class="text-input" id="placement-seconds" type="number" min="10" max="120" step="1" value="${Math.round((data.placementDurationMs || 30000) / 1000)}" required /></label>` : ''}
+    <small>설정은 대기실에서 바로 저장돼요. 경기 30~600초 · 문제 1~120초(또는 제한 없음) · 타자 테스트 10~120초. 시간이 끝난 타자는 입력한 만큼 부분 점수, 미응답 객관식은 감점 없이 다음 문제로 넘어가요.</small>
+  </fieldset>`;
+}
+
 function renderTeacherSettings(data) {
   if (!data?.self?.isHost || data.phase !== 'lobby') return '';
   const uploaded = data.questionSet?.count > 0;
   return `<details class="teacher-settings panel-card" ${state.teacherSettingsOpen ? 'open' : ''}>
     <summary>⚙ 선생님 설정</summary>
     <div class="teacher-settings-content">
+      <fieldset class="teacher-participation"><legend>문제 난이도</legend>
+        <div class="teacher-participation-options">${QUESTION_LEVEL_OPTIONS.map(option => `<label><input type="radio" name="question-level" value="${option.value}" ${(data.questionLevel || 'standard') === option.value ? 'checked' : ''} /><span>${option.label}</span></label>`).join('')}</div>
+        <p>${QUESTION_LEVEL_OPTIONS.find(option => option.value === data.questionLevel)?.description || QUESTION_LEVEL_OPTIONS[0].description} 저학년은 타자 입력이 없는 태블릿 모드를 권해요. 업로드한 CSV의 문제와 보기 4개는 그대로 사용해요.</p>
+      </fieldset>
+      ${renderTimeSettings(data)}
+
       <fieldset class="teacher-participation"><legend>선생님 경기 참가</legend>
         <div class="teacher-participation-options">${HOST_PARTICIPATION_OPTIONS.map((option) => `<label><input type="radio" name="host-participation" value="${option.value}" ${data.hostParticipation === option.value ? 'checked' : ''} /><span>${option.label}</span></label>`).join('')}</div>
         <p>게임 시작 전에 선택해 주세요. 진행만 하는 선생님은 팀 인원·타자 테스트·점수에 포함되지 않으며, 경기 중 전체 참가자의 점수 배율을 조정할 수 있어요.</p>
@@ -822,7 +860,7 @@ function renderLobby() {
           ${renderRoomEntryControls()}
           <div class="rules-mini"><span>01</span><p>타자로 입력하거나 태블릿에서 정답 보기를 터치해요.</p></div>
           <div class="rules-mini"><span>02</span><p>점수가 팀의 줄을 움직여요.</p></div>
-          <div class="rules-mini"><span>03</span><p>각 라운드 3분! 4라운드 뒤 2:2면 돌림판 결승을 진행해요.</p></div>
+          <div class="rules-mini"><span>03</span><p>라운드·문제별 시간은 선생님 설정에서 조절해요. 4라운드 뒤 2:2면 돌림판 결승을 진행해요.</p></div>
         </div>
       </section>
     `;
@@ -859,7 +897,7 @@ function renderLobby() {
       <div id="practice-root">${data.self?.spectator ? '' : renderPracticeCard(data)}</div>
       <div class="how-to panel-card">
         <div><span class="how-icon">✦</span><strong>게임 규칙</strong></div>
-        <p>${data?.playMode === 'tablet' ? '<b>타자 테스트 없이 모든 라운드를 터치 객관식으로 진행해요.</b> 보기 4개 중 한 번만 선택하세요. 기본 정답은 60점에 속도 보너스 최대 40점, 기본 오답 감점은 30점이에요. 선생님이 경기 중 설정한 배율을 곱하고, 정답에는 라운드·인원 보정도 적용돼요. 오답 해설은 3초 동안 보여 줘요.' : '위 연습은 점수에 반영되지 않아요. 방장이 시작하면 <b>30초 동안 문장을 입력해 타자 실력을 재고</b>, 팀을 자동으로 나눈 뒤 1라운드를 시작해요. 인원이 적은 팀에는 인원수 비율만큼 보정 점수가 적용돼요.'}</p>
+        <p>${data?.playMode === 'tablet' ? `<b>타자 테스트 없이 모든 라운드를 터치 객관식으로 진행해요.</b> 보기 ${data?.questionLevel === 'lower' && !data?.questionSet?.count ? 3 : 4}개 중 한 번만 선택하세요. 기본 정답은 60점에 속도 보너스 최대 40점, 기본 오답 감점은 30점이에요. 선생님이 경기 중 설정한 배율을 곱하고, 정답에는 라운드·인원 보정도 적용돼요. 오답 해설은 3초 동안 보여 줘요.` : `위 연습은 점수에 반영되지 않아요. 방장이 시작하면 <b>${Math.round((data.placementDurationMs || 30000) / 1000)}초 동안 문장을 입력해 타자 실력을 재고</b>, 팀을 자동으로 나눈 뒤 1라운드를 시작해요. 인원이 적은 팀에는 인원수 비율만큼 보정 점수가 적용돼요.`}</p>
       </div>
       ${isHost ? `<div class="lobby-start-bar panel-card" aria-label="학급 경기 시작"><div><strong>학생 ${studentCount}명 입장</strong><span>경기 참가 ${participantCount}명${participantCount < 2 ? ' · 2명 이상 모이면 시작할 수 있어요' : ' · 모두 모였으면 시작해 주세요'}</span></div><button id="start-button" type="button" class="primary-button compact" ${state.uploadingQuestions || participantCount < 2 ? 'disabled' : ''}>게임 시작 <span>→</span></button></div>` : ''}
     </section>
@@ -894,7 +932,7 @@ function renderPlacementCard(data) {
 function renderPracticeCard(data) {
   if (data.self?.spectator) return renderObserverCard();
   if (data?.playMode === 'tablet') {
-    return `<section class="practice-card panel-card"><div class="section-kicker">TABLET QUIZ · 터치로만 경기</div><h2>보기 4개 중 정답을 터치해요</h2><p class="muted">빠른 정답은 보너스! 기본 오답 감점은 30점이며 경기 중 선생님이 설정한 배율을 곱해요.</p><div class="round-strip">${(data.roundModes || []).map((mode, index) => `<span class="round-chip"><b>${index + 1}</b>${escapeHtml(mode.name)}</span>`).join('')}</div></section>`;
+    return `<section class="practice-card panel-card"><div class="section-kicker">TABLET QUIZ · 터치로만 경기</div><h2>보기 ${data.questionLevel === 'lower' && !data.questionSet?.count ? 3 : 4}개 중 정답을 터치해요</h2><p class="muted">빠른 정답은 보너스! 기본 오답 감점은 30점이며 경기 중 선생님이 설정한 배율을 곱해요.</p><div class="round-strip">${(data.roundModes || []).map((mode, index) => `<span class="round-chip"><b>${index + 1}</b>${escapeHtml(mode.name)}</span>`).join('')}</div></section>`;
   }
   const prompt = data?.prompt;
   if (!prompt?.word) {
@@ -1080,7 +1118,7 @@ function renderPrompt(data) {
   }
   if (data.phase === 'wheel') {
     const selected = Number(data.wheelSelectedIndex ?? 0);
-    return `<section class="prompt-card wheel-card" style="--wheel-turns:${1440 - selected * 90}deg;--wheel-duration:${Math.round(Number(data.wheelDurationMs || 7000) * .65)}ms"><span class="round-badge">FINAL ROUND</span><h2>2:2 동점! 결승 종목 돌림판</h2><p>1~4라운드 중 하나를 다시 겨뤄 최종 승자를 정해요.</p><div class="wheel-wrap"><div class="wheel-pointer" aria-hidden="true"></div><div class="game-wheel">${data.questionSet?.count && data.playMode === 'tablet' ? '<span>퀴즈 1</span><span>퀴즈 2</span><span>퀴즈 3</span><span>퀴즈 4</span>' : data.playMode === 'tablet' ? '<span>순우리말</span><span>창제 원리</span><span>세종대왕</span><span>종합 퀴즈</span>' : '<span>말모이</span><span>뜻풀이</span><span>바른말</span><span>릴레이</span>'}</div></div><p class="wheel-countdown">결승까지 <span id="wheel-time">${getTimeLabel(data.wheelRemainingMs)}</span></p><p class="wheel-result">선정 종목: <strong>${escapeHtml(data.roundModes?.[selected]?.name || modeLabels[roundModes[selected]?.id] || '')}</strong></p></section>`;
+    return `<section class="prompt-card wheel-card" style="--wheel-turns:${1440 - selected * 90}deg;--wheel-duration:${Math.round(Number(data.wheelDurationMs || 7000) * .65)}ms"><span class="round-badge">FINAL ROUND</span><h2>2:2 동점! 결승 종목 돌림판</h2><p>1~4라운드 중 하나를 다시 겨뤄 최종 승자를 정해요.</p><div class="wheel-wrap"><div class="wheel-pointer" aria-hidden="true"></div><div class="game-wheel">${data.questionSet?.count && data.playMode === 'tablet' ? '<span>퀴즈 1</span><span>퀴즈 2</span><span>퀴즈 3</span><span>퀴즈 4</span>' : data.playMode === 'tablet' ? '<span>낱말</span><span>한글</span><span>세종대왕</span><span>종합 퀴즈</span>' : '<span>말모이</span><span>뜻풀이</span><span>바른말</span><span>릴레이</span>'}</div></div><p class="wheel-countdown">결승까지 <span id="wheel-time">${getTimeLabel(data.wheelRemainingMs)}</span></p><p class="wheel-result">선정 종목: <strong>${escapeHtml(data.roundModes?.[selected]?.name || modeLabels[roundModes[selected]?.id] || '')}</strong></p></section>`;
   }
 
   if (data.phase === 'intermission') {
@@ -1117,7 +1155,7 @@ function renderPrompt(data) {
         <div class="prompt-meta"><span class="round-badge">ROUND ${data.roundNumber}</span><span class="category-badge ${prompt.category === '순우리말' ? '' : 'category-badge--history'}">${escapeHtml(prompt.category || '뜻풀이')}</span><span class="prompt-help">${prompt.source === 'custom' ? '선생님 문제 · 보기 4개 중 정답을 골라 주세요' : prompt.category === '순우리말' ? '이 뜻에 맞는 순우리말을 골라 주세요' : '한글 창제 원리와 세종대왕의 기록을 떠올려 골라 주세요'}</span></div>
         ${prompt.source !== 'custom' && prompt.category !== '순우리말' ? '<div class="history-ribbon">한글과 세종대왕 배움 카드</div>' : ''}
         <div class="meaning-question">${escapeHtml(prompt.meaning)}</div>
-        <div class="choice-grid">${prompt.choices.map((choice, index) => `<button class="choice-button" data-choice="${escapeHtml(choice)}"><span>${String.fromCharCode(9312 + index)}</span>${escapeHtml(choice)}</button>`).join('')}</div>
+        <div class="choice-grid ${prompt.choices.length === 3 ? 'choice-grid--three' : ''}">${prompt.choices.map((choice, index) => `<button class="choice-button" data-choice="${escapeHtml(choice)}"><span>${String.fromCharCode(9312 + index)}</span>${escapeHtml(choice)}</button>`).join('')}</div>
         <p class="prompt-note">기본 정답 60점 + 속도 보너스 최대 40점 · 기본 오답 −30점<br />기본 점수·감점에 선생님이 설정한 배율을 곱해요. 8초 안에 빠르게 맞힐수록 보너스가 커지고, 정답 점수에 라운드·인원 보정이 적용돼요.</p>
       </section>
     `;
@@ -1168,10 +1206,10 @@ function renderGame() {
   const finalRoundPending = !finalRoundActive && data.roundIndex < 4;
   return `
     <section class="game-page">
-      ${data.sessionMode === 'waiting' ? renderWaitingControls(data) : data.sessionMode === 'ai' ? `<section class="ai-match-status panel-card"><div><div class="section-kicker">AI MATCH · 1:1</div><h2>AI ${data.aiLevel}단계 · ${escapeHtml(getAiLevel(data.aiLevel)?.label || '')}</h2><p>청팀은 나, 백팀은 AI예요. ${data.playMode === 'tablet' ? '보기 4개를 터치해' : '네 종목의 문제를 풀어'} 겨뤄 보세요.</p></div><button id="return-lobby-button" type="button" class="secondary-button">학급 대기실로 돌아가기</button></section>` : ''}
+      ${data.sessionMode === 'waiting' ? renderWaitingControls(data) : data.sessionMode === 'ai' ? `<section class="ai-match-status panel-card"><div><div class="section-kicker">AI MATCH · 1:1</div><h2>AI ${data.aiLevel}단계 · ${escapeHtml(getAiLevel(data.aiLevel)?.label || '')}</h2><p>청팀은 나, 백팀은 AI예요. ${data.playMode === 'tablet' ? `보기 ${data.questionLevel === 'lower' && !data.questionSet?.count ? 3 : 4}개를 터치해` : '네 종목의 문제를 풀어'} 겨뤄 보세요.</p></div><button id="return-lobby-button" type="button" class="secondary-button">학급 대기실로 돌아가기</button></section>` : ''}
       <div class="game-heading"><div><div class="section-kicker">HANGUL DAY MATCH · ${data.roundNumber === 5 ? '결승 5라운드' : `${Math.max(1, data.roundNumber)}라운드`}</div><h1>${escapeHtml(data.mode?.name || '말모이 줄다리기')}</h1><p>${escapeHtml(data.mode?.description || '한글의 힘으로 줄을 당겨요.')}</p></div>${renderGameIdentity(data)}</div>
       ${renderScoreboard(data)}
-      ${renderScoreSettings(data)}
+      ${renderScoreSettings(data)}${data.phase === 'round' && data.answerRemainingMs > 0 && !data.self?.spectator ? '<div class="answer-clock" role="timer">이 문제 남은 시간 <strong id="answer-time"></strong></div>' : ''}
       ${renderArena(data)}
       <div id="prompt-root">${renderPrompt(data)}</div>
       ${data.sessionMode === 'waiting' ? '' : `<div class="round-strip">${(data.roundModes || roundModes).map((mode, index) => `<span class="round-chip ${index === data.roundIndex ? 'is-active' : index < data.roundIndex ? 'is-done' : ''}"><b>${index + 1}</b>${escapeHtml(mode.name || modeLabels[mode.id])}${data.roundScores?.[index] ? ` · ${teamName(data.roundScores[index].winner)} 승` : ''}</span>`).join('')}<span class="round-chip round-chip--final ${finalRoundActive ? 'is-active' : ''} ${finalRoundPending ? 'is-optional' : ''}" title="1~4라운드가 2:2로 끝나면 열립니다"><b>5</b>돌림판 결승${finalRoundPending ? ' · 2:2일 때' : ''}</span></div>`}
@@ -1346,6 +1384,8 @@ function updateDynamic() {
   const whiteMultiplier = document.querySelector('#white-multiplier');
   const blueWins = document.querySelector('#blue-wins');
   const whiteWins = document.querySelector('#white-wins');
+  const answerTime = document.querySelector('#answer-time');
+  if (answerTime) answerTime.textContent = getTimeLabel(liveMs(data.answerRemainingMs));
   const positionLabel = document.querySelector('.scene-position-label');
   if (blueScore) blueScore.textContent = formatScore(data.scores?.blue);
   if (whiteScore) whiteScore.textContent = formatScore(data.scores?.white);
