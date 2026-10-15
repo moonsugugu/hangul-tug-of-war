@@ -256,6 +256,17 @@ main { width: min(1180px, calc(100% - 36px)); margin: 0 auto 60px; }
 .prompt-note { margin: 12px 0 0; color: var(--muted); font-size: 11px; }
 .meaning-question, .repair-question, .relay-sentence { width: min(720px, 100%); margin: 20px auto; padding: 18px 20px; border-radius: 17px; background: #f8f4ed; font-size: clamp(17px, 3vw, 24px); line-height: 1.55; }
 .choice-grid { width: min(720px, 100%); display: grid; grid-template-columns: repeat(2, 1fr); gap: 9px; margin: 0 auto; }
+.choice-grid--three { grid-template-columns: 1fr; }
+.round-time-settings { margin: 18px 0; padding: 0; border: 0; }
+.round-time-settings legend { font-weight: 700; font-size: 20px; }
+.round-time-row, .round-time-head { display: grid; grid-template-columns: minmax(100px, 1.4fr) repeat(2, minmax(70px, 1fr)); gap: 10px; align-items: center; margin: 10px 0; }
+.round-time-row .text-input { width: 100%; min-width: 0; }
+.round-time-head { font-size: 13px; color: var(--muted); }
+.placement-time-label { display: flex; gap: 12px; align-items: center; margin: 16px 0; }
+.placement-time-label input { max-width: 110px; }
+.answer-clock { text-align: center; padding: 10px; font-weight: 700; }
+.answer-clock strong { color: var(--blue); margin-left: 8px; }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .choice-button { min-height: 80px; padding: 14px 9px; border: 1px solid #d9d0c6; border-radius: 13px; background: white; color: var(--ink); transition: .2s ease; touch-action: manipulation; }
 .choice-button:disabled { cursor: wait; opacity: .65; }
 .play-mode-picker { margin: 20px 0; padding: 12px; border: 1px solid #d9d0c6; border-radius: 14px; }

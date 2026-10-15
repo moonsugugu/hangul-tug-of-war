@@ -10,6 +10,9 @@ import { WORD_PROMPTS, WORD_QUIZ_PROMPTS, HANGUL_CREATION_QUIZ_PROMPTS } from '.
 import { MAX_CSV_BYTES, validateCustomQuestions } from '../shared/question-csv.js';
 import { SCORE_MULTIPLIER_LEVELS, SCORE_SETTING_PHASES, ANSWER_REVIEW_MS } from '../shared/score-settings.js';
 import { HOST_PARTICIPATION_OPTIONS } from '../shared/teacher-participation.js';
+import { QUESTION_LEVEL_OPTIONS } from '../shared/question-levels.js';
+import { defaultRoundSettings, validateRoundSettings } from '../shared/round-settings.js';
+import { LOWER_WORD_PROMPTS, LOWER_QUIZ_POOLS, LOWER_SENTENCES, LOWER_REPAIR_PROMPTS } from './lower-grade-prompts.js';
 import { getAiLevel, getAiAnswerDelay } from '../shared/ai-levels.js';
 import { createServer } from 'node:http';
 import { existsSync, createReadStream } from 'node:fs';
@@ -64,10 +67,10 @@ function shuffledIndexes(length, avoidFirst) {
   return order;
 }
 
-function shuffledWordIndexes(length, avoidFirst) {
+function shuffledWordIndexes(length, avoidFirst, pool = WORD_PROMPTS) {
   const groups = new Map();
   for (let index = 0; index < length; index += 1) {
-    const category = WORD_PROMPTS[index]?.category || '기타';
+    const category = pool[index]?.category || '기타';
     if (!groups.has(category)) groups.set(category, []);
     groups.get(category).push(index);
   }
@@ -101,13 +104,14 @@ function deckIndex(progress, key, length, position, makeOrder = shuffledIndexes)
   return deck.order[position % length];
 }
 
-function currentWordPrompt(progress, key = 'word') {
-  const index = deckIndex(progress, key, WORD_PROMPTS.length, progress.promptIndex, shuffledWordIndexes);
-  return { id: `word-${progress.promptIndex}-${index}`, prompt: WORD_PROMPTS[index] };
+function currentWordPrompt(room, progress, key = 'word') {
+  const pool = room.questionLevel === 'lower' ? LOWER_WORD_PROMPTS : WORD_PROMPTS;
+  const index = deckIndex(progress, key, pool.length, progress.promptIndex, (length, last) => shuffledWordIndexes(length, last, pool));
+  return { id: `${room.questionLevel === 'lower' ? 'lower-' : ''}word-${progress.promptIndex}-${index}`, prompt: pool[index] };
 }
 
-function currentPracticePrompt(progress) {
-  const { id, prompt } = currentWordPrompt(progress, 'practice');
+function currentPracticePrompt(room, progress) {
+  const { id, prompt } = currentWordPrompt(room, progress, 'practice');
   return { id: `practice-${id}`, prompt };
 }
 
@@ -151,14 +155,16 @@ function currentQuizPrompt(progress, pool) {
   return { id, prompt: { ...prompt, choices: progress.quizChoices } };
 }
 
-function currentRepairPrompt(progress) {
-  const index = deckIndex(progress, 'repair', REPAIR_PROMPTS.length, progress.promptIndex);
-  return { id: `repair-${progress.promptIndex}-${index}`, prompt: REPAIR_PROMPTS[index] };
+function currentRepairPrompt(room, progress) {
+  const pool = room.questionLevel === 'lower' ? LOWER_REPAIR_PROMPTS : REPAIR_PROMPTS;
+  const index = deckIndex(progress, 'repair', pool.length, progress.promptIndex);
+  return { id: `${room.questionLevel === 'lower' ? 'lower-' : ''}repair-${progress.promptIndex}-${index}`, prompt: pool[index] };
 }
 
-function currentPlacementPrompt(progress) {
-  const index = deckIndex(progress, 'placement', PLACEMENT_PROMPTS.length, progress.promptIndex);
-  return { id: `placement-${progress.promptIndex}-${index}`, sentence: PLACEMENT_PROMPTS[index] };
+function currentPlacementPrompt(room, progress) {
+  const pool = room.questionLevel === 'lower' ? LOWER_SENTENCES : PLACEMENT_PROMPTS;
+  const index = deckIndex(progress, 'placement', pool.length, progress.promptIndex);
+  return { id: `${room.questionLevel === 'lower' ? 'lower-' : ''}placement-${progress.promptIndex}-${index}`, sentence: pool[index] };
 }
 
 // Korean typing speed is counted in keystrokes (타): a syllable costs one key
@@ -252,15 +258,49 @@ const TABLET_QUIZ_POOLS = {
   sejong: HANGUL_CREATION_QUIZ_PROMPTS.filter((prompt) => prompt.category === '세종대왕 이야기'),
 };
 
+const LOWER_TYPING_MODES = MODES.map((mode, index) => ({ ...mode, name: ['쉬운 낱말 타자', '쉬운 말 뜻풀이', '짧은 문장 띄어쓰기', '짧은 문장 릴레이'][index], description: index === 1 ? '짧은 문제와 보기 세 개로 풀어요.' : '친숙한 낱말과 짧은 문장을 입력해요.' }));
+const LOWER_TABLET_MODES = TABLET_MODES.map((mode, index) => ({ ...mode, name: ['쉬운 낱말 뜻풀이', '글자 모으기', '쉬운 세종대왕 이야기', '저학년 종합 퀴즈'][index], description: '짧은 문제와 보기 세 개로 풀어요. 천천히 읽고 골라요.' }));
+
 function getModes(room) {
-  if (room.customModes) return room.customModes;
-  return room.playMode === 'tablet' ? TABLET_MODES : MODES;
+  const modes = room.customModes || (room.questionLevel === 'lower' ? room.playMode === 'tablet' ? LOWER_TABLET_MODES : LOWER_TYPING_MODES : room.playMode === 'tablet' ? TABLET_MODES : MODES);
+  return room.roundSettings ? modes.map((mode, index) => ({ ...mode, duration: room.roundSettings[index].durationSeconds * 1000 })) : modes;
 }
 
 function currentRoomQuizPrompt(room, player) {
-  const pool = room.customQuestions?.questions || TABLET_QUIZ_POOLS[getMode(room)?.pool];
+  const pools = room.questionLevel === 'lower' ? LOWER_QUIZ_POOLS : TABLET_QUIZ_POOLS;
+  const pool = room.customQuestions?.questions || pools[getMode(room)?.pool] || (room.questionLevel === 'lower' ? pools.mixed : undefined);
   const { id, prompt } = currentQuizPrompt(player.progress, pool);
   return { id: room.customQuestions ? `set-${room.questionRevision}-round-${room.game.roundIndex}-${id}` : room.playMode === 'tablet' ? `round-${room.game.roundIndex}-${id}` : id, prompt };
+}
+
+function placementDurationMs(room) {
+  return room.placementSeconds == null ? PLACEMENT_MS : room.placementSeconds * 1000;
+}
+
+function answerLimitMs(room) {
+  return room.roundSettings?.[room.game.modeIndex]?.answerSeconds * 1000 || (getMode(room)?.id === 'relay' ? RELAY_LIMIT_MS : 0);
+}
+
+function answerRemainingMs(room, player) {
+  if (!player || player.spectator || !player.progress || room.game.phase !== 'round') return 0;
+  const limit = answerLimitMs(room);
+  if (!limit) return 0;
+  const deadline = getMode(room)?.id === 'relay' ? room.game.relay?.deadline : player.progress.promptStartedAt + limit;
+  return Math.max(0, Math.min(deadline || 0, room.game.roundEndsAt) - Date.now());
+}
+
+function expireQuestion(room, player) {
+  const limit = answerLimitMs(room);
+  if (!limit || getMode(room)?.id === 'relay' || !player.progress || Date.now() < player.progress.promptStartedAt + limit) return false;
+  const index = player.progress.promptIndex;
+  settleRoundDrafts(room, player);
+  if (player.progress.promptIndex === index) player.progress.promptIndex += 1;
+  player.progress.promptStartedAt = Date.now();
+  player.roundDraft = null;
+  send(player.ws, { type: 'answerTimeout', message: '문제 풀이 시간이 끝났어요. 다음 문제를 풀어 봐요.' });
+  if (player.isAI) scheduleAiAnswer(room);
+  broadcast(room);
+  return true;
 }
 
 const MIME_TYPES = {
@@ -314,11 +354,14 @@ function createRoomId() {
   return roomId;
 }
 
-function createRoom(playMode = 'typing', hostParticipation = 'auto') {
+function createRoom(playMode = 'typing', hostParticipation = 'auto', questionLevel = 'standard') {
   const room = {
     id: createRoomId(),
     playMode,
     hostParticipation,
+    questionLevel,
+    roundSettings: null,
+    placementSeconds: null,
     sessionMode: 'class',
     aiLevel: 1,
     scoreMultiplier: 1,
@@ -444,7 +487,7 @@ function getPromptFor(room, player) {
   if (!player || player.spectator) return null;
   if (game.phase === 'lobby' && player?.progress) {
     if (room.playMode === 'tablet') return null;
-    const { id, prompt } = currentPracticePrompt(player.progress);
+    const { id, prompt } = currentPracticePrompt(room, player.progress);
     return {
       kind: 'practice',
       id,
@@ -455,7 +498,7 @@ function getPromptFor(room, player) {
     };
   }
   if (game.phase === 'placement' && player?.progress) {
-    const { id, sentence } = currentPlacementPrompt(player.progress);
+    const { id, sentence } = currentPlacementPrompt(room, player.progress);
     return { kind: 'placement', id, sentence };
   }
   if (game.phase !== 'round' || !player || player.spectator) return null;
@@ -463,7 +506,7 @@ function getPromptFor(room, player) {
   if (!mode) return null;
 
   if (mode.id === 'word') {
-    const { id, prompt } = currentWordPrompt(player.progress);
+    const { id, prompt } = currentWordPrompt(room, player.progress);
     return { kind: 'word', id, word: prompt.word, category: prompt.category, length: [...prompt.word].length };
   }
 
@@ -473,7 +516,7 @@ function getPromptFor(room, player) {
   }
 
   if (mode.id === 'repair') {
-    const { id, prompt } = currentRepairPrompt(player.progress);
+    const { id, prompt } = currentRepairPrompt(room, player.progress);
     return { kind: 'repair', id, question: prompt.question };
   }
 
@@ -508,7 +551,7 @@ function publicSelf(player) {
 }
 
 function publicStateFor(room, player, common) {
-  if (common) return { ...common, self: publicSelf(player), prompt: getPromptFor(room, player) };
+  if (common) return { ...common, self: publicSelf(player), prompt: getPromptFor(room, player), answerRemainingMs: answerRemainingMs(room, player) };
   const game = room.game;
   const counts = getCounts(room);
   const multipliers = getMultipliers(room);
@@ -526,6 +569,9 @@ function publicStateFor(room, player, common) {
     sessionMode: room.sessionMode,
     aiLevel: room.aiLevel,
     hostParticipation: room.hostParticipation,
+    questionLevel: room.questionLevel,
+    roundSettings: room.roundSettings || defaultRoundSettings(room.playMode, ROUND_DURATION_MS / 1000),
+    answerRemainingMs: answerRemainingMs(room, player),
     scoreMultiplier: room.scoreMultiplier,
     roundModes: getModes(room),
     questionSet: { fileName: room.customQuestions?.fileName || '', count: room.customQuestions?.questions.length || 0, revision: room.questionRevision },
@@ -545,7 +591,7 @@ function publicStateFor(room, player, common) {
     intermissionDurationMs: INTERMISSION_MS,
     wheelRemainingMs: game.phase === 'wheel' ? Math.max(0, game.wheelEndsAt - Date.now()) : 0,
     placementRemainingMs: game.phase === 'placement' ? Math.max(0, game.placementEndsAt - Date.now()) : 0,
-    placementDurationMs: PLACEMENT_MS,
+    placementDurationMs: placementDurationMs(room),
     teamRevealRemainingMs: game.phase === 'teamReveal' ? Math.max(0, game.teamRevealUntil - Date.now()) : 0,
     wheelDurationMs: WHEEL_DURATION_MS,
     wheelSelectedIndex: game.wheelSelectedIndex,
@@ -890,13 +936,14 @@ function startRelayDuel(room) {
     selected[team] = player.id;
   }
 
-  const prompt = RELAY_PROMPTS[Math.floor(Math.random() * RELAY_PROMPTS.length)];
+  const pool = room.questionLevel === 'lower' ? LOWER_SENTENCES : RELAY_PROMPTS;
+  const prompt = pool[Math.floor(Math.random() * pool.length)];
   game.relay = {
     blueId: selected.blue,
     whiteId: selected.white,
     prompt,
     startedAt: Date.now(),
-    deadline: Date.now() + RELAY_LIMIT_MS,
+    deadline: Date.now() + answerLimitMs(room),
     submissions: {},
     lastResult: null,
   };
@@ -925,10 +972,10 @@ function answerAsAi(room, now) {
     const wrong = source.choices.filter((choice) => choice !== source.answer);
     handleChoice(bot, correct ? source.answer : wrong[Math.floor(Math.random() * wrong.length)], prompt.id);
   } else {
-    const expected = prompt.kind === 'word' ? prompt.word : prompt.kind === 'repair' ? currentRepairPrompt(bot.progress).prompt.answer : prompt.prompt;
+    const expected = prompt.kind === 'word' ? prompt.word : prompt.kind === 'repair' ? currentRepairPrompt(room, bot.progress).prompt.answer : prompt.prompt;
     const answer = correct ? expected : `${expected.slice(0, -1)}?`;
     if (prompt.kind === 'relay') handleRelayAnswer(bot, answer, prompt.relayDeadline);
-    else handleTypedAnswer(bot, answer);
+    else handleTypedAnswer(bot, answer, prompt.id);
   }
   if (room.game.phase === 'round' && getMode(room)?.id !== 'relay') scheduleAiAnswer(room);
 }
@@ -978,21 +1025,21 @@ function settleRelayDrafts(room, relay) {
   }
 }
 
-function settleRoundDrafts(room) {
+function settleRoundDrafts(room, onlyPlayer) {
   const mode = getMode(room)?.id;
   if (mode === 'relay') {
     if (room.game.relay && !room.game.relay.lastResult) settleRelayDrafts(room, room.game.relay);
     return;
   }
   if (!['word', 'repair'].includes(mode)) return;
-  for (const player of getActivePlayers(room)) {
+  for (const player of onlyPlayer ? [onlyPlayer] : getActivePlayers(room)) {
     const draft = player.roundDraft;
     player.roundDraft = null;
     const prompt = getPromptFor(room, player);
     if (!draft || draft.kind !== mode || draft.promptId !== prompt?.id || !normalizeSentence(draft.text)) continue;
     const expected = mode === 'word'
-      ? currentWordPrompt(player.progress).prompt.word
-      : currentRepairPrompt(player.progress).prompt.answer;
+      ? currentWordPrompt(room, player.progress).prompt.word
+      : currentRepairPrompt(room, player.progress).prompt.answer;
     const result = calculateTypedScore(draft.text, expected, Date.now() - player.progress.promptStartedAt, mode);
     awardTimeoutScore(room, player, result.score);
     player.progress.promptIndex += 1;
@@ -1004,7 +1051,7 @@ function handlePlacementAnswer(room, player, answer) {
   const game = room.game;
   if (!player.progress) return;
   if (Date.now() >= game.placementEndsAt) return finishPlacement(room);
-  const { sentence } = currentPlacementPrompt(player.progress);
+  const { sentence } = currentPlacementPrompt(room, player.progress);
   const keystrokes = correctKeystrokes(answer, sentence);
   player.placementKeystrokes = (player.placementKeystrokes || 0) + keystrokes;
   player.progress.promptIndex += 1;
@@ -1021,7 +1068,7 @@ function handlePlacementAnswer(room, player, answer) {
 function finishPlacement(room) {
   const game = room.game;
   if (game.phase !== 'placement') return;
-  const minutes = PLACEMENT_MS / 60_000;
+  const minutes = placementDurationMs(room) / 60_000;
   const players = getActivePlayers(room);
   for (const player of players) {
     player.typingSpeed = Math.round((player.placementKeystrokes || 0) / minutes);
@@ -1040,7 +1087,7 @@ function finishPlacement(room) {
 function handlePracticeAnswer(room, player, answer) {
   const game = room.game;
   if (game.phase !== 'lobby' || !player.progress || !normalizeSentence(answer)) return;
-  const { prompt } = currentPracticePrompt(player.progress);
+  const { prompt } = currentPracticePrompt(room, player.progress);
   const elapsedMs = Date.now() - player.progress.promptStartedAt;
   const result = calculateTypedScore(answer, prompt.word, elapsedMs, 'word');
   player.practiceCount = (player.practiceCount || 0) + 1;
@@ -1060,7 +1107,7 @@ function handlePracticeAnswer(room, player, answer) {
   broadcast(room);
 }
 
-function handleTypedAnswer(player, answer) {
+function handleTypedAnswer(player, answer, promptId) {
   const room = getRoomForPlayer(player);
   if (!room || player.spectator) return;
   if (room.playMode === 'tablet') return;
@@ -1072,10 +1119,12 @@ function handleTypedAnswer(player, answer) {
   if (Date.now() < player.progress.promptStartedAt) return;
   const mode = getMode(room);
   if (!['word', 'repair'].includes(mode.id)) return;
+  if (expireQuestion(room, player)) return;
+  if ((answerLimitMs(room) || promptId != null) && promptId !== getPromptFor(room, player)?.id) return;
 
   const source = mode.id === 'word'
-    ? currentWordPrompt(player.progress).prompt
-    : currentRepairPrompt(player.progress).prompt;
+    ? currentWordPrompt(room, player.progress).prompt
+    : currentRepairPrompt(room, player.progress).prompt;
   const expected = mode.id === 'word' ? source.word : source.answer;
   const elapsedMs = Date.now() - player.progress.promptStartedAt;
   const result = calculateTypedScore(answer, expected, elapsedMs, mode.id);
@@ -1111,9 +1160,10 @@ function handleChoice(player, choice, promptId) {
   if (game.phase !== 'round' || getMode(room)?.id !== 'quiz') return;
   if (Date.now() >= game.roundEndsAt) return finishRound(room);
   if (Date.now() < player.progress.promptStartedAt) return;
+  if (expireQuestion(room, player)) return;
   const { id, prompt } = currentRoomQuizPrompt(room, player);
   // Tablet clients identify the question so a double tap cannot answer the next one.
-  if ((room.playMode === 'tablet' || room.customQuestions || promptId != null) && promptId !== id) return;
+  if ((room.playMode === 'tablet' || room.customQuestions || answerLimitMs(room) || promptId != null) && promptId !== id) return;
   if (!prompt.choices.includes(choice)) return;
   const elapsedMs = Date.now() - player.progress.promptStartedAt;
   const correct = choice === prompt.answer;
@@ -1177,6 +1227,7 @@ function handleDraft(player, message) {
   const game = room.game;
   if (game.phase !== 'round') return;
   if (Date.now() >= game.roundEndsAt) return finishRound(room);
+  if (expireQuestion(room, player)) return;
   const mode = getMode(room)?.id;
   const text = message.text.slice(0, 500);
   if (mode === 'relay') {
@@ -1213,7 +1264,7 @@ function startGame(player) {
   const now = Date.now();
   room.game = createGame();
   room.game.phase = 'placement';
-  room.game.placementEndsAt = now + PLACEMENT_MS;
+  room.game.placementEndsAt = now + placementDurationMs(room);
   room.game.notice = '타자 실력을 재고 있어요. 문장을 정확하게 입력해 주세요!';
   for (const entry of room.players.values()) {
     entry.spectator = entry.isHost && room.hostParticipation === 'observe';
@@ -1428,7 +1479,8 @@ function createRoomAndJoin(ws, message) {
     return;
   }
   if (rooms.size >= MAX_ROOMS) return send(ws, { type: 'error', message: '지금 열려 있는 방이 많아요. 잠시 뒤 다시 방을 만들어 주세요.' });
-  const room = createRoom(message.playMode || 'typing', message.hostParticipation || 'auto');
+  if (message.questionLevel !== undefined && !QUESTION_LEVEL_OPTIONS.some(option => option.value === message.questionLevel)) return send(ws, { type: 'error', message: '문제 난이도를 다시 선택해 주세요.' });
+  const room = createRoom(message.playMode || 'typing', message.hostParticipation || 'auto', message.questionLevel || 'standard');
   send(ws, { type: 'roomCreated', roomId: room.id, roomUrl: getRoomUrl(room.id) });
   joinPlayer(ws, { ...message, name, roomId: room.id });
 }
@@ -1457,6 +1509,26 @@ function updateHostParticipation(player, message) {
   if (!HOST_PARTICIPATION_OPTIONS.some((option) => option.value === message.participation)) return fail('선생님 참가 방식을 다시 선택해 주세요.');
   room.hostParticipation = message.participation;
   applyHostParticipation(room, player);
+  broadcast(room);
+}
+
+function updateLessonSettings(player, message) {
+  const room = getRoomForPlayer(player);
+  if (!room) return;
+  const fail = text => send(player.ws, { type: 'error', message: text });
+  if (!player.isHost) return fail('선생님(방장)만 문제와 시간 설정을 바꿀 수 있어요.');
+  if (room.game.phase !== 'lobby') return fail('문제와 시간 설정은 게임 시작 전 대기실에서 바꿔 주세요.');
+  if (message.type === 'setQuestionLevel') {
+    if (!QUESTION_LEVEL_OPTIONS.some(option => option.value === message.level)) return fail('문제 난이도를 다시 선택해 주세요.');
+    room.questionLevel = message.level;
+  } else {
+    let rounds;
+    try { rounds = validateRoundSettings(message.roundSettings, message.placementSeconds, room.playMode); }
+    catch (error) { return fail(error.message); }
+    room.roundSettings = rounds;
+    room.placementSeconds = message.placementSeconds;
+  }
+  resetPlayerProgress(room);
   broadcast(room);
 }
 
@@ -1527,13 +1599,14 @@ function handleMessage(ws, rawMessage) {
   if (message.type === 'uploadQuestions' || message.type === 'clearQuestions') return updateRoomQuestions(player, message);
   if (message.type === 'setScoreMultiplier') return updateScoreMultiplier(player, message);
   if (message.type === 'setHostParticipation') return updateHostParticipation(player, message);
+  if (message.type === 'setQuestionLevel' || message.type === 'setRoundSettings') return updateLessonSettings(player, message);
   if (message.type === 'advanceRound') return advanceRound(player, message);
   if (message.type === 'startWaiting' || message.type === 'startAI') return startSoloMode(player, message);
   if (message.type === 'selectWaitingRound') return selectWaitingRound(player, message);
   if (message.type === 'start') return startGame(player);
   if (message.type === 'restart') return resetToLobby(player);
   if (['answer', 'choice', 'relayAnswer'].includes(message.type)) {
-    if (message.type === 'answer') handleTypedAnswer(player, message.answer);
+    if (message.type === 'answer') handleTypedAnswer(player, message.answer, message.promptId);
     if (message.type === 'choice') handleChoice(player, message.choice, message.promptId);
     if (message.type === 'relayAnswer') handleRelayAnswer(player, message.answer, message.deadline);
     // 다음 문제는 답한 학생에게 즉시 보냅니다. 반 전체 방송을 기다리지 않습니다.
@@ -1556,6 +1629,7 @@ function tick() {
     if (game.phase === 'round') {
       if (now >= game.roundEndsAt) finishRound(room);
       else if (game.mode === 'relay' && game.relay && now >= game.relay.deadline) finishRelayDuel(room);
+      else if (game.mode !== 'relay') for (const player of getActivePlayers(room)) expireQuestion(room, player);
       if (room.sessionMode === 'ai' && room.game.phase === 'round') answerAsAi(room, now);
     } else if (game.phase === 'placement' && now >= game.placementEndsAt) {
       finishPlacement(room);
