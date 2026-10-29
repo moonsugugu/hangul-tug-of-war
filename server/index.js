@@ -1,6 +1,7 @@
 import { canSend, encodeMessage, stateDelta, takeMessageToken } from './transport.mjs';
 import { BUSY_MESSAGE, createLoadGuard } from './load-guard.mjs';
 import { createTrafficMeter } from './traffic-meter.mjs';
+import { createRoomRegistry, createTelemetry } from './telemetry.mjs';
 
 // 과부하 보호(coderule 규칙 19): 서버가 바쁘면 점수·명단 방송을 늦추고, 끊지 않고, 매우 바쁠 때만 새 방을 막는다.
 const loadGuard = createLoadGuard();
@@ -316,7 +317,15 @@ const MIME_TYPES = {
   '.mp4': 'video/mp4',
 };
 
-const rooms = new Map();
+// 서버 모니터용 집계(숫자만). Map 하위 클래스라 기존 코드는 그대로 동작한다.
+const rooms = createRoomRegistry();
+// 학생 = 연결 중인 참가자 중 방장(방을 만든 선생님)·AI 가 아닌 사람. 선생님 AI 1:1 경기를 기다리는 학생(관전)도 학생이다.
+const isStudent = (player) => !player.isHost && !player.isAI;
+const monitorSnapshot = createTelemetry(rooms, (room) => {
+  let students = 0;
+  for (const player of room.players.values()) if (isStudent(player) && player.ws?.readyState === 1) students += 1;
+  return { students, active: !['lobby', 'results'].includes(room.game.phase) };
+}, '연결 중인 학생(방장 선생님·AI 제외, 선생님 AI 경기 중 기다리는 학생 포함)', { game: 'hangul-tug', label: '말모이 줄다리기' });
 const socketRooms = new Map();
 
 function createGame() {
@@ -1413,6 +1422,8 @@ function attachPlayer(room, player, ws, resumed = false) {
   }
   player.ws = ws;
   player.disconnectedAt = null;
+  // 새 입장과 토큰 재접속이 모두 여기를 지난다. 같은 player.id 는 오늘 한 번만 센다.
+  if (isStudent(player)) rooms.noteStudent(room.id, player.id);
   room.emptySince = null;
   socketRooms.set(ws, room.id);
   ws.playerId = player.id;
@@ -1657,7 +1668,7 @@ async function serveStatic(req, res) {
   if (pathname === '/health' || SHARD_HEALTH_PATH.test(pathname)) {
     const playerCount = [...rooms.values()].reduce((total, room) => total + room.players.size, 0);
     res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
-    res.end(JSON.stringify({ ok: true, version: APP_VERSION, shard: SHARD_ID, shards: SHARD_COUNT, players: playerCount, rooms: rooms.size, load: loadGuard.status(), traffic: trafficMeter.status() }));
+    res.end(JSON.stringify({ ok: true, version: APP_VERSION, shard: SHARD_ID, shards: SHARD_COUNT, players: playerCount, rooms: rooms.size, load: loadGuard.status(), traffic: trafficMeter.status(), monitor: monitorSnapshot() }));
     return;
   }
 
