@@ -7,7 +7,10 @@
 import { randomUUID } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
 
-export const dayKey = (at = Date.now()) => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Seoul', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(at));
+// 한국 시간 날짜(YYYY-MM-DD). 한국은 서머타임이 없어 UTC+9 로 계산한다.
+// Intl.DateTimeFormat 을 부를 때마다 새로 만들면 1번에 수십 µs 가 들어, 입장·health 마다 부르는 곳에서 피한다.
+const KST_OFFSET_MS = 9 * 3600000;
+export const dayKey = (at = Date.now()) => new Date(at + KST_OFFSET_MS).toISOString().slice(0, 10);
 
 const MAX_SEATS_PER_ROOM = 2000;
 
