@@ -700,7 +700,7 @@ function renderHeader() {
       <a class="brand-mark" href="/" aria-label="말모이 줄다리기 홈">
         <span class="brand-mark__seal">한</span>
         <span>
-          <span class="brand-mark__title"><strong>말모이 줄다리기</strong><span class="brand-mark__version">ver.1.0.7</span></span>
+          <span class="brand-mark__title"><strong>말모이 줄다리기</strong><span class="brand-mark__version">ver.1.0.8</span></span>
           <small>한글날 기념 타자 대전</small>
         </span>
       </a>
@@ -852,7 +852,7 @@ function renderLobby() {
         <div class="join-card panel-card">
           <div class="section-kicker">${state.roomId ? '방 입장' : '방 만들기'}</div>
           <h2>${state.roomId ? '초대받은 방에 들어가요' : '방을 만들고 친구를 불러요'}</h2>
-          <p class="muted">닉네임과 캐릭터를 고르고 입장해요. 방을 만들 때 타자 모드 또는 태블릿 객관식 모드를 선택할 수 있어요. 한 방에 최대 30명까지 함께할 수 있어요.</p>
+          <p class="muted">닉네임과 캐릭터를 고르고 입장해요. 방을 만들 때 타자 모드 또는 태블릿 객관식 모드를 선택할 수 있어요. 한 방에 최대 40명까지 함께할 수 있어요.</p>
           <label class="field-label" for="nickname">닉네임</label>
           <input id="nickname" class="text-input" maxlength="18" autocomplete="nickname" placeholder="예: 한별" value="${escapeHtml(state.nickname)}" />
           <div class="field-label character-field-label">내 캐릭터 <span>하나를 골라 주세요</span></div>
@@ -877,7 +877,7 @@ function renderLobby() {
         <div>
           <div class="section-kicker">WAITING ROOM</div>
           <h1>모두 모이면 시작해요</h1>
-          <p class="muted">학생 입장 ${studentCount}/${data?.maxPlayers || 30}명 · 경기 참가 ${participantCount}명${players.some((player) => player.spectator) ? ' · 선생님은 진행만 해요' : ''}<br />${data?.playMode === 'tablet' ? '태블릿 객관식 모드 · 터치로만 경기하고 팀은 무작위로 나눠요.' : '기존 타자 모드 · 자유 연습 뒤 타자 실력을 재서 팀을 나눠요.'}</p>
+          <p class="muted">학생 입장 ${studentCount}/${data?.maxPlayers || 40}명 · 경기 참가 ${participantCount}명${players.some((player) => player.spectator) ? ' · 선생님은 진행만 해요' : ''}<br />${data?.playMode === 'tablet' ? '태블릿 객관식 모드 · 터치로만 경기하고 팀은 무작위로 나눠요.' : '기존 타자 모드 · 자유 연습 뒤 타자 실력을 재서 팀을 나눠요.'}</p>
         </div>
         ${isHost ? '' : '<span class="waiting-pill"><i></i> 진행자를 기다리는 중</span>'}
       </div>

@@ -54,7 +54,7 @@ const PLACEMENT_MS = Number(process.env.PLACEMENT_MS || 30_000);
 const TEAM_REVEAL_MS = Number(process.env.TEAM_REVEAL_MS || 7_000);
 const ROPE_MAX_STEPS = 20;
 const ROPE_POINTS_PER_STEP = 75;
-const MAX_PLAYERS_PER_ROOM = 30;
+const MAX_PLAYERS_PER_ROOM = 40;
 const MAX_ROOMS = Math.max(1, Math.min(2000, Math.floor(Number(process.env.MAX_ROOMS) || 400)));
 const CHARACTER_IDS = ['rabbit', 'bear', 'cat', 'chick', 'panda', 'sheep', 'fox', 'penguin'];
 
@@ -1380,7 +1380,7 @@ function joinPlayer(ws, message) {
     return;
   }
   if ([...room.players.values()].filter((entry) => !entry.isHost && !entry.isAI).length >= MAX_PLAYERS_PER_ROOM) {
-    send(ws, { type: 'error', message: '이 방은 최대 30명까지 참여할 수 있어요.' });
+    send(ws, { type: 'error', message: `이 방은 최대 ${MAX_PLAYERS_PER_ROOM}명까지 참여할 수 있어요.` });
     return;
   }
 

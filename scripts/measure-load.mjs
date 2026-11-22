@@ -44,7 +44,7 @@ for (const [folder, game] of configs) {
     host.send(JSON.stringify(threeD ? { type:'create_room',name:'T',teacherToken:'a'.repeat(48),settings:{maxPlayers:30} } : tug ? {type:'createRoom',name:'T',playMode:'tablet',hostParticipation:'observe'} : {type:'create',settings:{halfMinutes:3}}));
     const created = await wait(host,m=>m.type === (threeD ? 'room_created' : tug ? 'roomCreated' : 'welcome'));
     const room = created.room || created.roomId;
-    const studentCount = game === 'soccer' ? 26 : 30;
+    const studentCount = game === 'soccer' ? 26 : tug ? 40 : 30;
     for(let i=0;i<studentCount;i++) {
       const student = await connect(threeD ? '&room='+room+'&name=S'+i : '');
       if(!threeD) student.send(JSON.stringify({type:'join',roomId:room,name:'S'+i}));

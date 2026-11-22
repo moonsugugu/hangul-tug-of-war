@@ -98,10 +98,10 @@ test('경기 중 입장·만원 재접속·점수/문제 복구·선생님 새�
   const nextPrompt = a.state.prompt.id;
   const scoreCount = a.state.players.find((p) => p.id === id).scoreCount;
   // 재접속은 새 참가자 제한과 별개로 허용합니다.
-  for (let i = 0; i < 27; i++) await connect({ type: 'join', roomId, name: `추가${i}` });
+  for (let i = 0; i < 37; i++) await connect({ type: 'join', roomId, name: `추가${i}` });
   const outside = await connect();
   outside.send({ type: 'join', roomId, name: '초과' });
-  assert.match((await outside.wait((m) => m.type === 'error')).message, /30명/);
+  assert.match((await outside.wait((m) => m.type === 'error')).message, /40명/);
   outside.send({ type: 'resume', roomId, token: 'invalid' });
   assert.ok(await outside.wait((m) => m.type === 'resumeFailed'));
   const otherRoom = await connect({ type: 'createRoom', name: '다른선생님' });
@@ -119,7 +119,7 @@ test('경기 중 입장·만원 재접속·점수/문제 복구·선생님 새�
   assert.equal(restored.state.self.characterId, 'cat');
   assert.equal(restored.state.prompt.id, nextPrompt);
   assert.equal(restored.state.players.find((p) => p.id === id).scoreCount, scoreCount);
-  assert.equal(restored.state.players.filter((p) => !p.isHost).length, 30);
+  assert.equal(restored.state.players.filter((p) => !p.isHost).length, 40);
   assert.equal(restored.messages.find((m) => m.type === 'state').full, true);
   assert.equal(JSON.stringify(restored.state).includes(a.joined.token), false);
   // 이전 소켓의 지연된 close가 새 연결을 끊거나 참가 기록을 지우면 안 됩니다.
