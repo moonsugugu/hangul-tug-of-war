@@ -639,3 +639,14 @@ button:disabled { cursor: wait; opacity: .65; }
   .lobby-start-bar > div > span { font-size: 11px; }
   .lobby-start-bar .primary-button { min-width: 116px; padding: 12px; gap: 10px; }
 }
+
+/* 개인정보 처리방침 (첫 화면 맨 아래) */
+.privacy-policy { width: min(1180px, calc(100% - 36px)); margin: 0 auto 40px; font-size: 13px; line-height: 1.65; text-align: left; color: var(--ink); }
+.privacy-policy summary { cursor: pointer; font-weight: 700; font-size: 15px; padding: 10px 0; }
+.privacy-policy summary small { font-weight: 500; opacity: .7; margin-left: 6px; }
+.privacy-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 10px; margin: 6px 0 18px; }
+.privacy-cards > div { border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; background: var(--paper); }
+.privacy-policy h3 { font-size: 13.5px; margin: 0 0 6px; }
+.privacy-policy ul { margin: 0 0 10px; padding-left: 18px; }
+.privacy-policy li { margin: 3px 0; }
+.privacy-policy p { margin: 0 0 6px; }

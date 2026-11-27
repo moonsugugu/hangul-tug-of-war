@@ -1,5 +1,6 @@
 import { openQrDialog } from './qr-dialog.js';
 import { loadSession, saveSession, forgetSession } from './session.js';
+import { mountPrivacy, openPrivacy } from './privacy.js';
 import './styles.css';
 import { mountTugScene } from './tugScene.js';
 import { startBgm, stopBgm, unlockSoundEffects, playVictorySound } from './bgm.js';
@@ -12,6 +13,8 @@ import { defaultRoundSettings } from '../shared/round-settings.js';
 import { AI_LEVELS, getAiLevel } from '../shared/ai-levels.js';
 
 const app = document.querySelector('#app');
+const privacySection = mountPrivacy();
+let alignPrivacy = true;
 const initialRoomId = normalizeRoomId(new URLSearchParams(window.location.search).get('room'));
 const initialSession = loadSession(initialRoomId);
 const state = {
@@ -228,6 +231,8 @@ function connect() {
     if (pendingMessage) { const message = pendingMessage; pendingMessage = null; send(message); }
     else if (resumeToken && state.roomId) send({ type: 'resume', roomId: state.roomId, token: resumeToken });
     render();
+    // 처음 연결되면 첫 화면이 길어지므로 #privacy 자리를 한 번 다시 맞춘다
+    if (alignPrivacy) { alignPrivacy = false; openPrivacy(); }
   });
   socket.addEventListener('close', (event) => {
     if (socket !== currentSocket) return;
@@ -255,6 +260,7 @@ function connect() {
       state.data = null;
       lastViewKey = '';
       render();
+      openPrivacy();
       showNotice(message.message);
       return;
     }
@@ -700,7 +706,7 @@ function renderHeader() {
       <a class="brand-mark" href="/" aria-label="말모이 줄다리기 홈">
         <span class="brand-mark__seal">한</span>
         <span>
-          <span class="brand-mark__title"><strong>말모이 줄다리기</strong><span class="brand-mark__version">ver.1.0.9</span></span>
+          <span class="brand-mark__title"><strong>말모이 줄다리기</strong><span class="brand-mark__version">ver.1.0.10</span></span>
           <small>한글날 기념 타자 대전</small>
         </span>
       </a>
@@ -1236,6 +1242,8 @@ function render() {
   app.innerHTML = `${renderHeader()}<main>${page}</main>${renderTeacherQr()}<div id="notice-root"></div><div id="toast-root"></div><div id="wrong-answer-root"></div>`;
   const input = document.querySelector('#answer-input');
   if (input) input.value = state.draft;
+  // 처리방침은 첫 화면에만 둔다. 방 안과 방으로 다시 들어가는 중에는 숨긴다.
+  privacySection.hidden = state.joined || Boolean(resumeToken);
   bindEvents();
   renderRoomQr();
   updateDynamic();
@@ -1475,3 +1483,5 @@ document.addEventListener('keydown', () => { void unlockSoundEffects(); }, { onc
 currentShard = shardFromRoom(state.roomId);
 connect();
 render();
+addEventListener('hashchange', openPrivacy);
+openPrivacy();

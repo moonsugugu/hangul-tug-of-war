@@ -130,6 +130,10 @@ npm run dev
 
 문수네집 앱 브랜딩에 맞춰 앱 제목과 `made by 문수네집` 링크 그룹을 헤더에 배치했습니다.
 
+## 개인정보 처리방침
+
+첫 화면 맨 아래의 접힌 칸 `학교용 SW 보안 및 개인정보보호 준수 안내`에 있습니다(ver.1.0.10부터). 바로 여는 주소는 `https://tug.moonsunezip.com/#privacy`이고, 방 안에서는 보이지 않습니다. 글은 `src/privacy.js`에 있습니다. 빈 방을 지우는 시간(15분), 브라우저에 남기는 값(`hangul-tug-session:<방코드>`), 외부에서 불러오는 것(Google Fonts)을 바꾸면 글과 시행일도 같이 고칩니다.
+
 <!-- HOMESERVER:START -->
 ## 🏠 홈서버 배포 정보 (moonsunezip 노트북 서버)
 
