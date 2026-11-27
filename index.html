@@ -5,10 +5,27 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="description" content="한글날을 기념하는 실시간 타자 줄다리기 게임" />
     <meta name="theme-color" content="#f4efe6" />
-    <title>말모이 줄다리기 ver.1.0.8 · 한글날 기념 게임</title>
+    <title>말모이 줄다리기 ver.1.0.9 · 한글날 기념 게임</title>
   </head>
   <body>
-    <div id="app"></div>
+    <div id="app"><p id="boot-note" style="max-width:440px;margin:80px auto;padding:0 20px;color:#2f2b37;font:16px/1.7 sans-serif;text-align:center">말모이 줄다리기를 불러오는 중이에요…</p></div>
+    <script>
+      // ES5 로만 쓴다: 오래된 태블릿 브라우저에서도 이 부분은 돌아야 한다
+      (function () {
+        // 사파리 15.3·크롬 91 이하에 없는 .at(), 사파리 13·크롬 84 이하에 없는 replaceAll
+        function at(i) { i = Math.trunc(i) || 0; if (i < 0) i += this.length; return i < 0 || i >= this.length ? undefined : this[i]; }
+        [Array.prototype, String.prototype].forEach(function (p) {
+          if (!p.at) Object.defineProperty(p, 'at', { value: at, writable: true, configurable: true });
+        });
+        // ponytail: 글자로 찾는 경우만 지원(이 앱은 글자만 씀). 정규식으로 쓰게 되면 제대로 된 대체 코드로 바꾸기
+        if (!String.prototype.replaceAll) Object.defineProperty(String.prototype, 'replaceAll', { value: function (a, b) { return this.split(a).join(b); }, writable: true, configurable: true });
+        // 게임이 끝내 안 뜨면 까만·빈 화면 대신 이유를 보여 준다 (게임이 뜨면 이 글은 지워진다)
+        setTimeout(function () {
+          var note = document.getElementById('boot-note');
+          if (note) note.innerHTML = '<b>화면이 열리지 않았어요.</b><br>1. 인터넷 연결을 확인하고 새로 고침해 주세요.<br>2. 카카오톡·네이버 앱으로 QR을 찍었다면 크롬·사파리·삼성 인터넷 같은 기본 브라우저로 열어 주세요.<br>3. 학교 태블릿이면 브라우저를 최신으로 업데이트해 주세요.';
+        }, 15000);
+      })();
+    </script>
     <script type="module" src="/src/main.js"></script>
   </body>
 </html>
