@@ -850,7 +850,7 @@ function renderLobby() {
       <section class="lobby-layout">
         <div class="hero-card">
           <figure class="hero-preview"><video id="hero-preview-video" autoplay muted loop playsinline controls preload="metadata" poster="/videos/tug-preview-poster.jpg" aria-label="말모이 줄다리기 실제 경기 영상"><source src="/videos/tug-preview.mp4" type="video/mp4" />줄다리기 경기 영상입니다.</video><figcaption>우리말 문제를 풀수록 우리 팀이 줄을 당겨요.</figcaption></figure>
-          <div class="eyebrow">HANGUL DAY · REALTIME GAME</div>
+          <div class="eyebrow">HANGUL DAY · LIVE CLASS</div>
           <h1>우리말을 치고,<br /><em>줄을 당겨요.</em></h1>
           <p>순우리말의 뜻을 만나고, 바른 문장을 완성하며 청팀과 백팀이 한글의 힘으로 겨뤄요.</p>
           <div class="hero-stamps"><span>정확도</span><span>속도</span><span>팀워크</span></div>
